@@ -14,7 +14,7 @@ using Akka.Streams;
 
 namespace Akka.Persistence.Sql.Query.Dao
 {
-    public class ByteArrayReadJournalDao<TJournalPayload> : BaseByteReadArrayJournalDao<TJournalPayload>
+    public sealed class ByteArrayReadJournalDao<TJournalPayload> : BaseByteReadArrayJournalDao<TJournalPayload>
     {
         public ByteArrayReadJournalDao(
             IAdvancedScheduler scheduler,
