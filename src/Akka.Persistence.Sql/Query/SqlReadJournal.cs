@@ -27,7 +27,36 @@ using Akka.Util;
 
 namespace Akka.Persistence.Sql.Query
 {
-    public class SqlReadJournal<TJournalPayload> :
+    public sealed class SqlReadJournal<TJournalPayload>
+        : SqlReadJournal<TJournalPayload, ByteArrayReadJournalDao<TJournalPayload>>
+    {
+        public SqlReadJournal(
+            ExtendedActorSystem system
+            , Configuration.Config config
+            , Func<(Serializer, object), TJournalPayload> toPayload
+            , Func<(Serializer, TJournalPayload, Type), object> fromPayload)
+            : base(system, config
+                , (mat, readJournalConfig) =>
+                    new ByteArrayReadJournalDao<TJournalPayload>(
+                        scheduler: system.Scheduler.Advanced,
+                        materializer: mat,
+                        connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(
+                            new LinqToDBLoggerAdapter(system.Log), readJournalConfig),
+                        readJournalConfig: readJournalConfig,
+                        serializer: new ByteArrayJournalSerializer<TJournalPayload>(
+                            journalConfig: readJournalConfig,
+                            serializer: system.Serialization,
+                            separator: readJournalConfig.PluginConfig.TagSeparator,
+                            writerUuid: null,
+                            toPayload: toPayload,
+                            fromPayload: fromPayload),
+                        // TODO: figure out a way to signal shutdown to the query executor here
+                        default))
+        {
+        }
+    }
+
+    public class SqlReadJournal<TJournalPayload, TReaderDao> :
         IPersistenceIdsQuery,
         ICurrentPersistenceIdsQuery,
         IEventsByPersistenceIdQuery,
@@ -36,6 +65,7 @@ namespace Akka.Persistence.Sql.Query
         ICurrentEventsByTagQuery,
         IAllEventsQuery,
         ICurrentAllEventsQuery
+        where TReaderDao : BaseByteReadArrayJournalDao<TJournalPayload>
     {
         // ReSharper disable once UnusedMember.Global
         [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
@@ -46,14 +76,15 @@ namespace Akka.Persistence.Sql.Query
         private readonly IActorRef _journalSequenceActor;
         private readonly ActorMaterializer _mat;
         private readonly ReadJournalConfig<TJournalPayload> _readJournalConfig;
-        private readonly ByteArrayReadJournalDao<TJournalPayload> _readJournalDao;
+        private readonly TReaderDao _readJournalDao;
         private readonly ExtendedActorSystem _system;
+        protected TReaderDao ReadJournalDao => _readJournalDao;
 
         public SqlReadJournal(
             ExtendedActorSystem system,
             Configuration.Config config,
-            Func<(Serializer, object), TJournalPayload> toPayload,
-            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
+            Func<IMaterializer, ReadJournalConfig<TJournalPayload>, TReaderDao> readerFactory
+        )
         {
             _readJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(_readJournalConfig.WritePluginId);
@@ -64,28 +95,13 @@ namespace Akka.Persistence.Sql.Query
             var started = writeJournal.Ask<Initialized>(IsInitialized.Instance, TimeSpan.FromSeconds(5)).Result;
 
             _system = system;
-            var loggingAdapter = new LinqToDBLoggerAdapter(system.Log);
-            var connFact = new AkkaPersistenceDataConnectionFactory<TJournalPayload>(loggingAdapter, _readJournalConfig);
 
             _mat = Materializer.CreateSystemMaterializer(
                 context: system,
                 settings: ActorMaterializerSettings.Create(system),
                 namePrefix: $"l2db-query-mat-{Guid.NewGuid():N}");
 
-            _readJournalDao = new ByteArrayReadJournalDao<TJournalPayload>(
-                scheduler: system.Scheduler.Advanced,
-                materializer: _mat,
-                connectionFactory: connFact,
-                readJournalConfig: _readJournalConfig,
-                serializer: new ByteArrayJournalSerializer<TJournalPayload>(
-                    journalConfig: _readJournalConfig,
-                    serializer: system.Serialization,
-                    separator: _readJournalConfig.PluginConfig.TagSeparator,
-                    writerUuid: null,
-                    toPayload: toPayload,
-                    fromPayload: fromPayload),
-                // TODO: figure out a way to signal shutdown to the query executor here
-                default);
+            _readJournalDao = readerFactory(_mat, _readJournalConfig);
 
             _journalSequenceActor = system.ActorOf(
                 props: Props.Create(
@@ -192,7 +208,8 @@ namespace Akka.Persistence.Sql.Query
             long toSequenceNr,
             Option<(TimeSpan, IScheduler)> refreshInterval)
             => _readJournalDao
-                .MessagesWithBatch(persistenceId, fromSequenceNr, toSequenceNr, _readJournalConfig.MaxBufferSize, refreshInterval)
+                .MessagesWithBatch(persistenceId, fromSequenceNr, toSequenceNr, _readJournalConfig.MaxBufferSize,
+                    refreshInterval)
                 .SelectAsync(1, representationAndOrdering => Task.FromResult(representationAndOrdering.Get()))
                 .SelectMany(r => AdaptEvents(r.Representation).Select(_ => new { representation = r.Representation, ordering = r.Ordering, tags = r.Tags}))
                 .Select(
@@ -381,7 +398,8 @@ namespace Akka.Persistence.Sql.Query
                                     .Where(r => r != null)
                                     .Max(t => t.Value);
 
-                            return Option<((long nextStartingOffset, FlowControlEnum nextControl), IImmutableList<EventEnvelope>xs)>.Create(
+                            return Option<((long nextStartingOffset, FlowControlEnum nextControl),
+                                IImmutableList<EventEnvelope>xs)>.Create(
                                 ((nextStartingOffset, nextControl), xs));
                         }
 
