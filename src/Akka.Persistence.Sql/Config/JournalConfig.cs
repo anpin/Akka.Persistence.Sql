@@ -9,14 +9,14 @@ using Akka.Persistence.Sql.Extensions;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class JournalConfig : IProviderConfig<JournalTableConfig>
+    public class JournalConfig<TJournalPayload> : IProviderConfig<JournalTableConfig<TJournalPayload>>
     {
         public JournalConfig(Configuration.Config config)
         {
             MaterializerDispatcher = config.GetString("materializer-dispatcher", "akka.actor.default-dispatcher");
             ConnectionString = config.GetString("connection-string");
             ProviderName = config.GetString("provider-name");
-            TableConfig = new JournalTableConfig(config);
+            TableConfig = new JournalTableConfig<TJournalPayload>(config);
             PluginConfig = new JournalPluginConfig(config);
             DaoConfig = new BaseByteArrayJournalDaoConfig(config);
 
@@ -51,7 +51,7 @@ namespace Akka.Persistence.Sql.Config
 
         public IDaoConfig IDaoConfig => DaoConfig;
 
-        public JournalTableConfig TableConfig { get; }
+        public JournalTableConfig<TJournalPayload> TableConfig { get; }
 
         public string DefaultSerializer { get; }
 

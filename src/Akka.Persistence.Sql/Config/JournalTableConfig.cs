@@ -9,7 +9,7 @@ using Akka.Configuration;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class JournalTableConfig : IEquatable<JournalTableConfig>
+    public class JournalTableConfig<TJournalPayload> : IEquatable<JournalTableConfig<TJournalPayload>>
     {
         public JournalTableConfig(Configuration.Config config)
         {
@@ -27,7 +27,7 @@ namespace Akka.Persistence.Sql.Config
                 $"The configuration path akka.persistence.journal.sql.{mappingPath} does not exist");
 
             if (mappingPath != "default")
-                mappingConfig = mappingConfig.WithFallback(SqlPersistence.DefaultJournalMappingConfiguration);
+                mappingConfig = mappingConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultJournalMappingConfiguration);
 
             SchemaName = mappingConfig.GetString("schema-name");
 
@@ -48,7 +48,7 @@ namespace Akka.Persistence.Sql.Config
         // ReSharper disable once InconsistentNaming
         public TagTableConfig TagTable { get; }
 
-        public bool Equals(JournalTableConfig other)
+        public bool Equals(JournalTableConfig<TJournalPayload> other)
         {
             if (ReferenceEquals(null, other))
                 return false;
@@ -69,7 +69,7 @@ namespace Akka.Persistence.Sql.Config
             if (ReferenceEquals(this, obj))
                 return true;
 
-            return obj is JournalTableConfig j && Equals(j);
+            return obj is JournalTableConfig<TJournalPayload> j && Equals(j);
         }
 
         public override int GetHashCode()

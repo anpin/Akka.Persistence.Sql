@@ -10,7 +10,7 @@ using LinqToDB.Mapping;
 
 namespace Akka.Persistence.Sql.Snapshot
 {
-    public class DateTimeSnapshotRow
+    public class DateTimeSnapshotRow<TPayload>
     {
         [PrimaryKey]
         [NotNull]
@@ -22,7 +22,7 @@ namespace Akka.Persistence.Sql.Snapshot
         [Column(DataType = DataType.DateTime2)]
         public DateTime Created { get; set; }
 
-        public byte[] Payload { get; set; }
+        public TPayload Payload { get; set; }
 
         public string Manifest { get; set; }
 

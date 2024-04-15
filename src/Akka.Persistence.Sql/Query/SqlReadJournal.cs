@@ -20,13 +20,14 @@ using Akka.Persistence.Sql.Journal.Dao;
 using Akka.Persistence.Sql.Query.Dao;
 using Akka.Persistence.Sql.Query.InternalProtocol;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Akka.Util;
 
 namespace Akka.Persistence.Sql.Query
 {
-    public class SqlReadJournal :
+    public class SqlReadJournal<TJournalPayload> :
         IPersistenceIdsQuery,
         ICurrentPersistenceIdsQuery,
         IEventsByPersistenceIdQuery,
@@ -38,47 +39,51 @@ namespace Akka.Persistence.Sql.Query
     {
         // ReSharper disable once UnusedMember.Global
         [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
-        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal.DefaultConfiguration;
+        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal<TJournalPayload>.DefaultConfiguration;
 
         private readonly Source<long, ICancelable> _delaySource;
         private readonly EventAdapters _eventAdapters;
         private readonly IActorRef _journalSequenceActor;
         private readonly ActorMaterializer _mat;
-        private readonly ReadJournalConfig _readJournalConfig;
-        private readonly ByteArrayReadJournalDao _readJournalDao;
+        private readonly ReadJournalConfig<TJournalPayload> _readJournalConfig;
+        private readonly ByteArrayReadJournalDao<TJournalPayload> _readJournalDao;
         private readonly ExtendedActorSystem _system;
 
         public SqlReadJournal(
             ExtendedActorSystem system,
-            Configuration.Config config)
+            Configuration.Config config,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
-            _readJournalConfig = new ReadJournalConfig(config);
+            _readJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(_readJournalConfig.WritePluginId);
-            
+
             // Fix for https://github.com/akkadotnet/Akka.Persistence.Sql/issues/344
             var writeJournal = Persistence.Instance.Apply(system).JournalFor(_readJournalConfig.WritePluginId);
             // we want to block, we want to crash if the journal is not available
             var started = writeJournal.Ask<Initialized>(IsInitialized.Instance, TimeSpan.FromSeconds(5)).Result;
-            
-            _system = system;
 
-            var connFact = new AkkaPersistenceDataConnectionFactory(_readJournalConfig);
+            _system = system;
+            var loggingAdapter = new LinqToDBLoggerAdapter(system.Log);
+            var connFact = new AkkaPersistenceDataConnectionFactory<TJournalPayload>(loggingAdapter, _readJournalConfig);
 
             _mat = Materializer.CreateSystemMaterializer(
                 context: system,
                 settings: ActorMaterializerSettings.Create(system),
                 namePrefix: $"l2db-query-mat-{Guid.NewGuid():N}");
 
-            _readJournalDao = new ByteArrayReadJournalDao(
+            _readJournalDao = new ByteArrayReadJournalDao<TJournalPayload>(
                 scheduler: system.Scheduler.Advanced,
                 materializer: _mat,
                 connectionFactory: connFact,
                 readJournalConfig: _readJournalConfig,
-                serializer: new ByteArrayJournalSerializer(
+                serializer: new ByteArrayJournalSerializer<TJournalPayload>(
                     journalConfig: _readJournalConfig,
                     serializer: system.Serialization,
                     separator: _readJournalConfig.PluginConfig.TagSeparator,
-                    writerUuid: null),
+                    writerUuid: null,
+                    toPayload: toPayload,
+                    fromPayload: fromPayload),
                 // TODO: figure out a way to signal shutdown to the query executor here
                 default);
 
@@ -197,7 +202,7 @@ namespace Akka.Persistence.Sql.Query
                             persistenceId: r.representation.PersistenceId,
                             sequenceNr: r.representation.SequenceNr,
                             @event: r.representation.Payload,
-                            timestamp: r.representation.Timestamp, 
+                            timestamp: r.representation.Timestamp,
                             tags: r.tags));
 
         private Source<EventEnvelope, NotUsed> CurrentJournalEvents(long offset, long max, MaxOrderingId latestOrdering)

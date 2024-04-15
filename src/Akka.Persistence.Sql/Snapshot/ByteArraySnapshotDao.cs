@@ -13,36 +13,40 @@ using Akka.Event;
 using Akka.Persistence.Sql.Config;
 using Akka.Persistence.Sql.Db;
 using Akka.Persistence.Sql.Extensions;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Util;
 using LinqToDB;
 
 namespace Akka.Persistence.Sql.Snapshot
 {
-    public class ByteArraySnapshotDao : ISnapshotDao
+    public class ByteArraySnapshotDao<TJournalPayload> : ISnapshotDao
     {
-        private readonly AkkaPersistenceDataConnectionFactory _connectionFactory;
-        private readonly ByteArrayDateTimeSnapshotSerializer _dateTimeSerializer;
+        private readonly AkkaPersistenceDataConnectionFactory<TJournalPayload> _connectionFactory;
+        private readonly ByteArrayDateTimeSnapshotSerializer<TJournalPayload> _dateTimeSerializer;
         private readonly ILoggingAdapter _logger;
-        private readonly ByteArrayLongSnapshotSerializer _longSerializer;
+        private readonly ByteArrayLongSnapshotSerializer<TJournalPayload> _longSerializer;
         private readonly IsolationLevel _readIsolationLevel;
         private readonly CancellationTokenSource _shutdownCts;
-        private readonly SnapshotConfig _snapshotConfig;
+        private readonly SnapshotConfig<TJournalPayload> _snapshotConfig;
         private readonly IsolationLevel _writeIsolationLevel;
 
         public ByteArraySnapshotDao(
-            AkkaPersistenceDataConnectionFactory connectionFactory,
-            SnapshotConfig snapshotConfig,
+            AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
+            SnapshotConfig<TJournalPayload> snapshotConfig,
             Akka.Serialization.Serialization serialization,
             IMaterializer materializer,
-            ILoggingAdapter logger)
+            ILoggingAdapter logger,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
+
         {
             _logger = logger;
             _snapshotConfig = snapshotConfig;
             _connectionFactory = connectionFactory;
 
-            _dateTimeSerializer = new ByteArrayDateTimeSnapshotSerializer(serialization, _snapshotConfig);
-            _longSerializer = new ByteArrayLongSnapshotSerializer(serialization, _snapshotConfig);
+            _dateTimeSerializer = new ByteArrayDateTimeSnapshotSerializer<TJournalPayload>(serialization, _snapshotConfig, toPayload, fromPayload);
+            _longSerializer = new ByteArrayLongSnapshotSerializer<TJournalPayload>(serialization, _snapshotConfig, toPayload, fromPayload);
 
             _writeIsolationLevel = snapshotConfig.WriteIsolationLevel;
             _readIsolationLevel = snapshotConfig.ReadIsolationLevel;
@@ -63,14 +67,14 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(r => r.PersistenceId == persistenceId)
                             .DeleteAsync(token);
                     }
                     else
                     {
                         await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(r => r.PersistenceId == persistenceId)
                             .DeleteAsync(token);
                     }
@@ -91,7 +95,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -101,7 +105,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -125,7 +129,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -135,7 +139,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -160,7 +164,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -171,7 +175,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -195,7 +199,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         var row = await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(r => r.PersistenceId == persistenceId)
                             .OrderByDescending(t => t.SequenceNumber)
                             .FirstOrDefaultAsync(token);
@@ -207,7 +211,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         var row = await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(r => r.PersistenceId == persistenceId)
                             .OrderByDescending(t => t.SequenceNumber)
                             .FirstOrDefaultAsync(token);
@@ -233,7 +237,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         var row = await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -248,7 +252,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         var row = await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -277,7 +281,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         var row = await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -292,7 +296,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         var row = await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -322,7 +326,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         var row = await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -338,7 +342,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         var row = await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -368,7 +372,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     if (connection.UseDateTime)
                     {
                         await connection
-                            .GetTable<DateTimeSnapshotRow>()
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -378,7 +382,7 @@ namespace Akka.Persistence.Sql.Snapshot
                     else
                     {
                         await connection
-                            .GetTable<LongSnapshotRow>()
+                            .GetTable<LongSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
@@ -426,11 +430,11 @@ namespace Akka.Persistence.Sql.Snapshot
             var footer = _snapshotConfig.GenerateSnapshotFooter();
             if (connection.UseDateTime)
             {
-                await connection.CreateTableAsync<DateTimeSnapshotRow>(TableOptions.CreateIfNotExists, footer);
+                await connection.CreateTableAsync<DateTimeSnapshotRow<TJournalPayload>>(TableOptions.CreateIfNotExists, footer);
             }
             else
             {
-                await connection.CreateTableAsync<LongSnapshotRow>(TableOptions.CreateIfNotExists, footer);
+                await connection.CreateTableAsync<LongSnapshotRow<TJournalPayload>>(TableOptions.CreateIfNotExists, footer);
             }
         }
     }

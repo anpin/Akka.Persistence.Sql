@@ -12,9 +12,9 @@ using Akka.Persistence.Hosting;
 
 namespace Akka.Persistence.Sql.Hosting
 {
-    public sealed class SqlSnapshotOptions : SnapshotOptions
+    public sealed class SqlSnapshotOptions<TJournalPayload> : SnapshotOptions
     {
-        private static readonly Configuration.Config Default = SqlPersistence.DefaultSnapshotConfiguration;
+        private static readonly Configuration.Config Default = SqlPersistence<TJournalPayload>.DefaultSnapshotConfiguration;
 
         public SqlSnapshotOptions() : this(true) { }
 

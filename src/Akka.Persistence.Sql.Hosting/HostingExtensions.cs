@@ -125,7 +125,7 @@ namespace Akka.Persistence.Sql.Hosting
         ///     Thrown when <paramref name="journalBuilder" /> is set and <paramref name="mode" /> is set to
         ///     <see cref="PersistenceMode.SnapshotStore" />
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
             string connectionString,
             string providerName,
@@ -149,7 +149,7 @@ namespace Akka.Persistence.Sql.Hosting
             if (string.IsNullOrWhiteSpace(providerName))
                 throw new ArgumentNullException(nameof(providerName), $"{nameof(providerName)} can not be null");
 
-            var journalOpt = new SqlJournalOptions(isDefaultPlugin, pluginIdentifier)
+            var journalOpt = new SqlJournalOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 ConnectionString = connectionString,
                 ProviderName = providerName,
@@ -178,7 +178,7 @@ namespace Akka.Persistence.Sql.Hosting
             journalBuilder?.Invoke(adapters);
             journalOpt.Adapters = adapters;
 
-            var snapshotOpt = new SqlSnapshotOptions(isDefaultPlugin, pluginIdentifier)
+            var snapshotOpt = new SqlSnapshotOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 ConnectionString = connectionString,
                 ProviderName = providerName,
@@ -237,26 +237,26 @@ namespace Akka.Persistence.Sql.Hosting
         ///     Thrown when both <paramref name="journalOptionConfigurator" /> and <paramref name="snapshotOptionConfigurator" />
         ///     are null.
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
-            Action<SqlJournalOptions>? journalOptionConfigurator = null,
-            Action<SqlSnapshotOptions>? snapshotOptionConfigurator = null,
+            Action<SqlJournalOptions<TJournalPayload>>? journalOptionConfigurator = null,
+            Action<SqlSnapshotOptions<TJournalPayload>>? snapshotOptionConfigurator = null,
             bool isDefaultPlugin = true)
         {
             if (journalOptionConfigurator is null && snapshotOptionConfigurator is null)
                 throw new ArgumentException($"{nameof(journalOptionConfigurator)} and {nameof(snapshotOptionConfigurator)} could not both be null");
 
-            SqlJournalOptions? journalOptions = null;
+            SqlJournalOptions<TJournalPayload>? journalOptions = null;
             if (journalOptionConfigurator is not null)
             {
-                journalOptions = new SqlJournalOptions(isDefaultPlugin);
+                journalOptions = new SqlJournalOptions<TJournalPayload>(isDefaultPlugin);
                 journalOptionConfigurator(journalOptions);
             }
 
-            SqlSnapshotOptions? snapshotOptions = null;
+            SqlSnapshotOptions<TJournalPayload>? snapshotOptions = null;
             if (snapshotOptionConfigurator is not null)
             {
-                snapshotOptions = new SqlSnapshotOptions(isDefaultPlugin);
+                snapshotOptions = new SqlSnapshotOptions<TJournalPayload>(isDefaultPlugin);
                 snapshotOptionConfigurator(snapshotOptions);
             }
 
@@ -288,10 +288,10 @@ namespace Akka.Persistence.Sql.Hosting
         /// <exception cref="ArgumentException">
         ///     Thrown when both <paramref name="journalOptions" /> and <paramref name="snapshotOptions" /> are null.
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
-            SqlJournalOptions? journalOptions = null,
-            SqlSnapshotOptions? snapshotOptions = null)
+            SqlJournalOptions<TJournalPayload>? journalOptions = null,
+            SqlSnapshotOptions<TJournalPayload>? snapshotOptions = null)
         {
             return (journalOptions, snapshotOptions) switch
             {

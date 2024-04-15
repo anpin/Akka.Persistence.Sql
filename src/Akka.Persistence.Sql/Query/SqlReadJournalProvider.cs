@@ -4,25 +4,33 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using Akka.Actor;
 using Akka.Persistence.Query;
+using Akka.Serialization;
 
 namespace Akka.Persistence.Sql.Query
 {
-    public class SqlReadJournalProvider : IReadJournalProvider
+    public class SqlReadJournalProvider<TJournalPayload> : IReadJournalProvider
     {
         private readonly Configuration.Config _config;
         private readonly ExtendedActorSystem _system;
+        private readonly Func<(Serializer, object), TJournalPayload> _toPayload;
+        private readonly Func<(Serializer, TJournalPayload, Type), object> _fromPayload;
 
         public SqlReadJournalProvider(
             ExtendedActorSystem system,
-            Configuration.Config config)
+            Configuration.Config config,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
             _system = system;
-            _config = config.WithFallback(SqlPersistence.DefaultQueryConfiguration);
+            _toPayload = toPayload;
+            _fromPayload = fromPayload;
+            _config = config.WithFallback(SqlPersistence<TJournalPayload>.DefaultQueryConfiguration);
         }
 
         public IReadJournal GetReadJournal()
-            => new SqlReadJournal(_system, _config);
+            => new SqlReadJournal<TJournalPayload>(_system, _config, _toPayload, _fromPayload);
     }
 }

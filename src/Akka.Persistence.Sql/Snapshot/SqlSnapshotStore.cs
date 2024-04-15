@@ -13,33 +13,39 @@ using Akka.Persistence.Snapshot;
 using Akka.Persistence.Sql.Config;
 using Akka.Persistence.Sql.Db;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 
 namespace Akka.Persistence.Sql.Snapshot
 {
-    public class SqlSnapshotStore : SnapshotStore, IWithUnboundedStash
+    public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedStash
     {
         // ReSharper disable once UnusedMember.Global
         [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
         public static readonly Configuration.Config DefaultConfiguration =
-            ConfigurationFactory.FromResource<SqlSnapshotStore>("Akka.Persistence.Sql.snapshot.conf");
+            ConfigurationFactory.FromResource<SqlSnapshotStore<TJournalPayload>>("Akka.Persistence.Sql.snapshot.conf");
 
-        private readonly ByteArraySnapshotDao _dao;
+        private readonly ByteArraySnapshotDao<TJournalPayload> _dao;
         private readonly ILoggingAdapter _log;
-        private readonly SnapshotConfig _settings;
+        private readonly SnapshotConfig<TJournalPayload> _settings;
 
-        public SqlSnapshotStore(Configuration.Config snapshotConfig)
+        public SqlSnapshotStore(Configuration.Config snapshotConfig,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
             _log = Context.GetLogger();
 
-            var config = snapshotConfig.WithFallback(SqlPersistence.DefaultSnapshotConfiguration);
-            _settings = new SnapshotConfig(config);
+            var config = snapshotConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultSnapshotConfiguration);
+            _settings = new SnapshotConfig<TJournalPayload>(config);
 
-            _dao = new ByteArraySnapshotDao(
-                connectionFactory: new AkkaPersistenceDataConnectionFactory(_settings),
+            _dao = new ByteArraySnapshotDao<TJournalPayload>(
+                connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(_settings),
                 snapshotConfig: _settings,
                 serialization: Context.System.Serialization,
                 materializer: Materializer.CreateSystemMaterializer((ExtendedActorSystem)Context.System),
-                logger: Context.GetLogger());
+                logger: Context.GetLogger(),
+                toPayload: toPayload,
+                fromPayload: fromPayload
+                );
         }
 
         public IStash Stash { get; set; }

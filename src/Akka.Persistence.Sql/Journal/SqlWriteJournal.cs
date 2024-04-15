@@ -18,6 +18,7 @@ using Akka.Persistence.Sql.Db;
 using Akka.Persistence.Sql.Journal.Dao;
 using Akka.Persistence.Sql.Journal.Types;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Akka.Util;
@@ -38,30 +39,38 @@ namespace Akka.Persistence.Sql.Journal
             => UnixEpoch.AddMilliseconds(unixEpochMillis);
     }
 
-    public class SqlWriteJournal : AsyncWriteJournal, IWithUnboundedStash
+    public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnboundedStash
     {
-        [Obsolete(message: "Use SqlPersistence.DefaultConfiguration or SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
-        public static readonly Configuration.Config DefaultConfiguration = SqlPersistence.DefaultConfiguration;
+        private readonly Func<(Serializer, object), TJournalPayload> _toPayload;
+        private readonly Func<(Serializer, TJournalPayload, Type), object> _fromPayload;
 
-        private readonly JournalConfig _journalConfig;
+        [Obsolete(message: "Use SqlPersistence.DefaultConfiguration or SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
+        public static readonly Configuration.Config DefaultConfiguration = SqlPersistence<TJournalPayload>.DefaultConfiguration;
+
+        private readonly JournalConfig<TJournalPayload> _journalConfig;
         private readonly ILoggingAdapter _log;
         private readonly CancellationTokenSource _pendingWriteCts;
         private readonly bool _useWriterUuid;
 
         private readonly Dictionary<string, Task> _writeInProgress = new();
 
-        private ByteArrayJournalDao _journal;
+        private ByteArrayJournalDao<TJournalPayload> _journal;
 
         private ActorMaterializer _mat;
 
-        public SqlWriteJournal(Configuration.Config journalConfig)
+        public SqlWriteJournal(
+            Configuration.Config journalConfig,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
             _log = Context.GetLogger();
             _pendingWriteCts = new CancellationTokenSource();
 
-            var config = journalConfig.WithFallback(SqlPersistence.DefaultJournalConfiguration);
-            _journalConfig = new JournalConfig(config);
+            var config = journalConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultJournalConfiguration);
+            _journalConfig = new JournalConfig<TJournalPayload>(config);
             _useWriterUuid = _journalConfig.TableConfig.EventJournalTable.UseWriterUuidColumn;
+            _toPayload = toPayload;
+            _fromPayload = fromPayload;
         }
 
         // Stash is needed because we need to stash all incoming messages while we're waiting for the
@@ -97,18 +106,21 @@ namespace Akka.Persistence.Sql.Journal
                         .Create(Context.System)
                         .WithDispatcher(_journalConfig.MaterializerDispatcher),
                     namePrefix: "l2dbWriteJournal");
-
-                _journal = new ByteArrayJournalDao(
+                var loggingAdapter = new LinqToDBLoggerAdapter(Context.System.Log);
+                _journal = new ByteArrayJournalDao<TJournalPayload>(
                     scheduler: Context.System.Scheduler.Advanced,
                     mat: _mat,
-                    connection: new AkkaPersistenceDataConnectionFactory(_journalConfig),
+                    connection: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(loggingAdapter, _journalConfig),
                     journalConfig: _journalConfig,
                     serializer: Context.System.Serialization,
                     logger: Context.GetLogger(),
                     selfUuid: _useWriterUuid
                         ? Guid.NewGuid().ToString("N")
                         : null,
-                    shutdownToken: _pendingWriteCts.Token);
+                    shutdownToken: _pendingWriteCts.Token,
+                    toPayload: _toPayload,
+                    fromPayload: _fromPayload
+                    );
 
                 if (!_journalConfig.AutoInitialize)
                     return Status.Success.Instance;

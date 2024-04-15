@@ -13,10 +13,10 @@ using Akka.Persistence.Sql.Config;
 
 namespace Akka.Persistence.Sql.Hosting
 {
-    public sealed class SqlJournalOptions : JournalOptions
+    public sealed class SqlJournalOptions<TJournalPayload> : JournalOptions
     {
-        private static readonly Configuration.Config Default = SqlPersistence.DefaultJournalConfiguration;
-        private static readonly Configuration.Config DefaultQuery = SqlPersistence.DefaultQueryConfiguration;
+        private static readonly Configuration.Config Default = SqlPersistence<TJournalPayload>.DefaultJournalConfiguration;
+        private static readonly Configuration.Config DefaultQuery = SqlPersistence<TJournalPayload>.DefaultQueryConfiguration;
 
         public SqlJournalOptions() : this(true) { }
 
@@ -80,7 +80,7 @@ namespace Akka.Persistence.Sql.Hosting
         ///     you leave this empty for greenfield projects.
         /// </summary>
         public TagMode? TagStorageMode { get; set; }
-        
+
         public string? TagSeparator { get; set; }
 
         /// <summary>
@@ -120,7 +120,7 @@ namespace Akka.Persistence.Sql.Hosting
         public Configuration.Config DefaultQueryConfig => DefaultQuery.MoveTo(QueryPluginId);
 
         public string QueryPluginId => $"akka.persistence.query.journal.{Identifier}";
-        
+
         protected override StringBuilder Build(StringBuilder sb)
         {
             if (string.IsNullOrWhiteSpace(ConnectionString))
@@ -140,7 +140,7 @@ namespace Akka.Persistence.Sql.Hosting
 
             if (TagSeparator is not null)
                 sb.AppendLine($"tag-separator = {TagSeparator.ToHocon()}");
-            
+
             if (DatabaseOptions is not null)
                 sb.AppendLine($"table-mapping = {DatabaseOptions.Mapping.Name().ToHocon()}");
 
@@ -155,10 +155,10 @@ namespace Akka.Persistence.Sql.Hosting
             base.Build(sb);
 
             BuildQueryConfig(sb, QueryPluginId, PluginId);
-            
+
             if (IsDefaultPlugin && Identifier is not "sql")
                 BuildQueryConfig(sb, "akka.persistence.query.journal.sql", "akka.persistence.journal.sql");
-            
+
             return sb;
         }
 
@@ -168,7 +168,7 @@ namespace Akka.Persistence.Sql.Hosting
             sb.AppendLine($"connection-string = {ConnectionString.ToHocon()}");
             sb.AppendLine($"provider-name = {ProviderName.ToHocon()}");
             sb.AppendLine($"write-plugin = {pluginId}");
-                
+
             if (DatabaseOptions is not null)
                 sb.AppendLine($"table-mapping = {DatabaseOptions.Mapping.Name().ToHocon()}");
 
@@ -177,19 +177,19 @@ namespace Akka.Persistence.Sql.Hosting
 
             if (TagSeparator is not null)
                 sb.AppendLine($"tag-separator = {TagSeparator.ToHocon()}");
-            
+
             if (ReadIsolationLevel is not null)
                 sb.AppendLine($"read-isolation-level = {ReadIsolationLevel.ToHocon()}");
 
             if (QueryRefreshInterval is not null)
                 sb.AppendLine($"refresh-interval = {QueryRefreshInterval.ToHocon()}");
-            
+
             sb.AppendLine($"serializer = {Serializer.ToHocon()}");
-            
+
             DatabaseOptions?.Build(sb);
-                
+
             sb.AppendLine("}");
-            
+
             return sb;
         }
     }

@@ -18,6 +18,7 @@ using Akka.Persistence.Sql.Db;
 using Akka.Persistence.Sql.Extensions;
 using Akka.Persistence.Sql.Journal.Types;
 using Akka.Persistence.Sql.Serialization;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using LanguageExt;
@@ -27,31 +28,33 @@ using static LanguageExt.Prelude;
 
 namespace Akka.Persistence.Sql.Journal.Dao
 {
-    public abstract class BaseByteArrayJournalDao : BaseJournalDaoWithReadMessages, IJournalDaoWithUpdates
+    public abstract class BaseByteArrayJournalDao<TJournalPayload> : BaseJournalDaoWithReadMessages<TJournalPayload>, IJournalDaoWithUpdates
     {
-        private readonly Flow<JournalRow, Util.Try<ReplayCompletion>, NotUsed> _deserializeFlowMapped;
+        private readonly Flow<JournalRow<TJournalPayload>, Util.Try<ReplayCompletion>, NotUsed> _deserializeFlowMapped;
         private readonly TagMode _tagWriteMode;
-        protected readonly JournalConfig JournalConfig;
+        protected readonly JournalConfig<TJournalPayload> JournalConfig;
 
         protected readonly ILoggingAdapter Logger;
-        protected readonly FlowPersistentRepresentationSerializer<JournalRow> Serializer;
+        protected readonly FlowPersistentRepresentationSerializer<JournalRow<TJournalPayload>> Serializer;
 
-        protected readonly ISourceQueueWithComplete<WriteQueueEntry> WriteQueue;
+        protected readonly ISourceQueueWithComplete<WriteQueueEntry<TJournalPayload>> WriteQueue;
 
         protected BaseByteArrayJournalDao(
             IAdvancedScheduler scheduler,
             IMaterializer materializer,
-            AkkaPersistenceDataConnectionFactory connectionFactory,
-            JournalConfig config,
+            AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
+            JournalConfig<TJournalPayload> config,
             Akka.Serialization.Serialization serializer,
             ILoggingAdapter logger,
             string selfUuid,
-            CancellationToken shutdownToken)
+            CancellationToken shutdownToken,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
             : base(scheduler, materializer, connectionFactory, config, shutdownToken)
         {
             Logger = logger;
             JournalConfig = config;
-            Serializer = new ByteArrayJournalSerializer(config, serializer, config.PluginConfig.TagSeparator, selfUuid);
+            Serializer = new ByteArrayJournalSerializer<TJournalPayload>(config, serializer, config.PluginConfig.TagSeparator, selfUuid, toPayload, fromPayload);
             _deserializeFlowMapped = Serializer.DeserializeFlow().Select(MessageWithBatchMapper());
             _tagWriteMode = JournalConfig.PluginConfig.TagMode;
 
@@ -59,13 +62,13 @@ namespace Akka.Persistence.Sql.Journal.Dao
             // Keeping it here vs init function prevents accidental moving of init
             // to where variables aren't set yet.
             WriteQueue = Source
-                .Queue<WriteQueueEntry>(JournalConfig.DaoConfig.BufferSize, OverflowStrategy.DropNew)
+                .Queue<WriteQueueEntry<TJournalPayload>>(JournalConfig.DaoConfig.BufferSize, OverflowStrategy.DropNew)
                 .BatchWeighted(
                     JournalConfig.DaoConfig.BatchSize,
                     cf => cf.Rows.Count,
-                    r => new WriteQueueSet(ImmutableList.Create(new[] { r.Tcs }), r.Rows),
+                    r => new WriteQueueSet<TJournalPayload>(ImmutableList.Create(new[] { r.Tcs }), r.Rows),
                     (oldRows, newRows) =>
-                        new WriteQueueSet(
+                        new WriteQueueSet<TJournalPayload>(
                             oldRows.Tcs.Add(newRows.Tcs),
                             oldRows.Rows.Concat(newRows.Rows)))
                 .SelectAsync(
@@ -116,7 +119,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 async (connection, token) =>
                 {
                     await connection
-                        .GetTable<JournalRow>()
+                        .GetTable<JournalRow<TJournalPayload>>()
                         .Where(
                             r =>
                                 r.PersistenceId == persistenceId &&
@@ -147,7 +150,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                     }
 
                     await connection
-                        .GetTable<JournalRow>()
+                        .GetTable<JournalRow<TJournalPayload>>()
                         .Where(
                             r =>
                                 r.PersistenceId == persistenceId &&
@@ -197,7 +200,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 async (connection, token) =>
                 {
                     await connection
-                        .GetTable<JournalRow>()
+                        .GetTable<JournalRow<TJournalPayload>>()
                         .Where(
                             r =>
                                 r.PersistenceId == persistenceId &&
@@ -238,8 +241,8 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 ShutdownToken,
                 async (connection, token) =>
                 {
-                    IQueryable<JournalRow> query = connection
-                        .GetTable<JournalRow>()
+                    IQueryable<JournalRow<TJournalPayload>> query = connection
+                        .GetTable<JournalRow<TJournalPayload>>()
                         .Where(
                             r =>
                                 r.PersistenceId == persistenceId &&
@@ -259,13 +262,13 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 });
         }
 
-        private async Task QueueWriteJournalRows(Seq<JournalRow> xs)
+        private async Task QueueWriteJournalRows(Seq<JournalRow<TJournalPayload>> xs)
         {
             var promise = new TaskCompletionSource<NotUsed>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Send promise and rows into queue. If the Queue takes it,
             // It will write the Promise state when finished writing (or failing)
-            var result = await WriteQueue.OfferAsync(new WriteQueueEntry(promise, xs));
+            var result = await WriteQueue.OfferAsync(new WriteQueueEntry<TJournalPayload>(promise, xs));
 
             switch (result)
             {
@@ -292,7 +295,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             await promise.Task;
         }
 
-        private async Task WriteJournalRows(Seq<JournalRow> xs)
+        private async Task WriteJournalRows(Seq<JournalRow<TJournalPayload>> xs)
         {
             switch (xs.Count)
             {
@@ -317,7 +320,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             }
         }
 
-        private async Task InsertMultiple(Seq<JournalRow> xs)
+        private async Task InsertMultiple(Seq<JournalRow<TJournalPayload>> xs)
         {
             await ConnectionFactory.ExecuteWithTransactionAsync(
                 WriteIsolationLevel,
@@ -348,8 +351,8 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static async Task InsertWithOrderingAndBulkInsertTags(
-            AkkaDataConnection connection,
-            Seq<JournalRow> xs,
+            AkkaDataConnection<TJournalPayload> connection,
+            Seq<JournalRow<TJournalPayload>> xs,
             BaseByteArrayJournalDaoConfig config,
             CancellationToken token)
         {
@@ -386,12 +389,12 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static async Task BulkInsertNoTagTableTags(
-            AkkaDataConnection connection,
-            Seq<JournalRow> xs,
+            AkkaDataConnection<TJournalPayload> connection,
+            Seq<JournalRow<TJournalPayload>> xs,
             BaseByteArrayJournalDaoConfig config,
             CancellationToken token)
             => await connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .BulkCopyAsync(
                     new BulkCopyOptions()
                         .WithBulkCopyType(
@@ -405,9 +408,9 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
         // By using a custom flatten here, we avoid an Enumerable/LINQ allocation
         // And are able to have a little more control over default capacity of array.
-        private static IEnumerable<JournalRow> FlattenListOfListsToList(List<Util.Try<JournalRow[]>> source)
+        private static IEnumerable<JournalRow<TJournalPayload>> FlattenListOfListsToList(List<Util.Try<JournalRow<TJournalPayload>[]>> source)
         {
-            var rows = new List<JournalRow>(
+            var rows = new List<JournalRow<TJournalPayload>>(
                 source.Count > 4
                     ? source.Count
                     : 4);
@@ -422,7 +425,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             return rows;
         }
 
-        protected static ImmutableList<Exception> BuildWriteRejections(List<Util.Try<JournalRow[]>> serializedTries)
+        protected static ImmutableList<Exception> BuildWriteRejections(List<Util.Try<JournalRow<TJournalPayload>[]>> serializedTries)
         {
             var builderEx = new Exception[serializedTries.Count];
             for (var i = 0; i < serializedTries.Count; i++)
@@ -433,17 +436,17 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static IQueryable<long> MaxMarkedForDeletionMaxPersistenceIdQuery(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId)
             => connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .Where(r => r.PersistenceId == persistenceId && r.Deleted)
                 .OrderByDescending(r => r.SequenceNumber)
                 .Select(r => r.SequenceNumber)
                 .Take(1);
 
         private IQueryable<long?> MaxSeqNumberForPersistenceIdQuery(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId,
             long minSequenceNumber = 0)
         {
@@ -466,19 +469,19 @@ namespace Akka.Persistence.Sql.Journal.Dao
         }
 
         private static IQueryable<long?> MaxSeqForPersistenceIdQueryableNativeMode(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId)
             => connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .Where(r => r.PersistenceId == persistenceId)
                 .Select(r => (long?)r.SequenceNumber);
 
         private static IQueryable<long?> MaxSeqForPersistenceIdQueryableNativeModeMinId(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId,
             long minSequenceNumber)
             => connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .Where(
                     r =>
                         r.PersistenceId == persistenceId &&
@@ -486,11 +489,11 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 .Select(r => (long?)r.SequenceNumber);
 
         private static IQueryable<long?> MaxSeqForPersistenceIdQueryableCompatibilityModeWithMinId(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId,
             long minSequenceNumber)
             => connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .Where(
                     r =>
                         r.PersistenceId == persistenceId &&
@@ -506,10 +509,10 @@ namespace Akka.Persistence.Sql.Journal.Dao
                         .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue()));
 
         private static IQueryable<long?> MaxSeqForPersistenceIdQueryableCompatibilityMode(
-            AkkaDataConnection connection,
+            AkkaDataConnection<TJournalPayload> connection,
             string persistenceId)
             => connection
-                .GetTable<JournalRow>()
+                .GetTable<JournalRow<TJournalPayload>>()
                 .Where(r => r.PersistenceId == persistenceId)
                 .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue())
                 .Union(

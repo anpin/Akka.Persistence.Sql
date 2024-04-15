@@ -18,11 +18,11 @@ namespace Akka.Persistence.Sql.Config
         public int Parallelism { get; } = 0;
     }
 
-    public class SnapshotConfig : IProviderConfig<SnapshotTableConfiguration>
+    public class SnapshotConfig<TJournalPayload> : IProviderConfig<SnapshotTableConfiguration<TJournalPayload>>
     {
         public SnapshotConfig(Configuration.Config config)
         {
-            TableConfig = new SnapshotTableConfiguration(config);
+            TableConfig = new SnapshotTableConfiguration<TJournalPayload>(config);
             PluginConfig = new SnapshotPluginConfig(config);
 
             var dbConf = config.GetString(ConfigKeys.useSharedDb);
@@ -56,7 +56,7 @@ namespace Akka.Persistence.Sql.Config
 
         public string ConnectionString { get; }
 
-        public SnapshotTableConfiguration TableConfig { get; }
+        public SnapshotTableConfiguration<TJournalPayload> TableConfig { get; }
 
         public IDaoConfig IDaoConfig { get; }
 

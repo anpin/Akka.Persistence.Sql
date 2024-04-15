@@ -14,14 +14,14 @@ using Akka.Streams;
 
 namespace Akka.Persistence.Sql.Query.Dao
 {
-    public class ByteArrayReadJournalDao : BaseByteReadArrayJournalDao
+    public class ByteArrayReadJournalDao<TJournalPayload> : BaseByteReadArrayJournalDao<TJournalPayload>
     {
         public ByteArrayReadJournalDao(
             IAdvancedScheduler scheduler,
             IMaterializer materializer,
-            AkkaPersistenceDataConnectionFactory connectionFactory,
-            ReadJournalConfig readJournalConfig,
-            FlowPersistentRepresentationSerializer<JournalRow> serializer,
+            AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
+            ReadJournalConfig<TJournalPayload> readJournalConfig,
+            FlowPersistentRepresentationSerializer<JournalRow<TJournalPayload>> serializer,
             CancellationToken token)
             : base(scheduler, materializer, connectionFactory, readJournalConfig, serializer, token) { }
     }
