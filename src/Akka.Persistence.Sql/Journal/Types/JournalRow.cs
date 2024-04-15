@@ -4,9 +4,11 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+// using System.Text.Json;
+
 namespace Akka.Persistence.Sql.Journal.Types
 {
-    public sealed class JournalRow
+    public sealed class JournalRow<T>
     {
         public long Ordering { get; set; }
 
@@ -18,7 +20,10 @@ namespace Akka.Persistence.Sql.Journal.Types
 
         public long SequenceNumber { get; set; }
 
-        public byte[] Message { get; set; }
+        public T Message { get; set; }
+        // public JsonDocument Message { get; set; }
+        // public JsonDocument Message { get; set; }
+        // public byte[] Message { get; set; }
 
         public string Tags { get; set; }
 

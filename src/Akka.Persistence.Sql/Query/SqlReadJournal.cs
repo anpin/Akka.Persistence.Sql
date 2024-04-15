@@ -20,13 +20,14 @@ using Akka.Persistence.Sql.Journal.Dao;
 using Akka.Persistence.Sql.Query.Dao;
 using Akka.Persistence.Sql.Query.InternalProtocol;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Akka.Util;
 
 namespace Akka.Persistence.Sql.Query
 {
-    public class SqlReadJournal :
+    public class SqlReadJournal<TJournalPayload> :
         IPersistenceIdsQuery,
         ICurrentPersistenceIdsQuery,
         IEventsByPersistenceIdQuery,
@@ -38,43 +39,47 @@ namespace Akka.Persistence.Sql.Query
     {
         // ReSharper disable once UnusedMember.Global
         [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
-        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal.DefaultConfiguration;
+        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal<TJournalPayload>.DefaultConfiguration;
 
         private readonly Source<long, ICancelable> _delaySource;
         private readonly EventAdapters _eventAdapters;
         private readonly IActorRef _journalSequenceActor;
         private readonly ActorMaterializer _mat;
-        private readonly ReadJournalConfig _readJournalConfig;
-        private readonly ByteArrayReadJournalDao _readJournalDao;
+        private readonly ReadJournalConfig<TJournalPayload> _readJournalConfig;
+        private readonly ByteArrayReadJournalDao<TJournalPayload> _readJournalDao;
         private readonly ExtendedActorSystem _system;
 
         public SqlReadJournal(
             ExtendedActorSystem system,
-            Configuration.Config config)
+            Configuration.Config config,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
             var writePluginId = config.GetString("write-plugin");
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(writePluginId);
 
-            _readJournalConfig = new ReadJournalConfig(config);
+            _readJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
             _system = system;
-
-            var connFact = new AkkaPersistenceDataConnectionFactory(_readJournalConfig);
+            var loggingAdapter = new LinqToDBLoggerAdapter(system.Log);
+            var connFact = new AkkaPersistenceDataConnectionFactory<TJournalPayload>(loggingAdapter, _readJournalConfig);
 
             _mat = Materializer.CreateSystemMaterializer(
                 context: system,
                 settings: ActorMaterializerSettings.Create(system),
                 namePrefix: $"l2db-query-mat-{Guid.NewGuid():N}");
 
-            _readJournalDao = new ByteArrayReadJournalDao(
+            _readJournalDao = new ByteArrayReadJournalDao<TJournalPayload>(
                 scheduler: system.Scheduler.Advanced,
                 materializer: _mat,
                 connectionFactory: connFact,
                 readJournalConfig: _readJournalConfig,
-                serializer: new ByteArrayJournalSerializer(
+                serializer: new ByteArrayJournalSerializer<TJournalPayload>(
                     journalConfig: _readJournalConfig,
                     serializer: system.Serialization,
                     separator: _readJournalConfig.PluginConfig.TagSeparator,
-                    writerUuid: null),
+                    writerUuid: null,
+                    toPayload: toPayload,
+                    fromPayload: fromPayload),
                 // TODO: figure out a way to signal shutdown to the query executor here
                 default);
 

@@ -14,16 +14,16 @@ namespace Akka.Persistence.Sql.Query.Dao
     /// <summary>
     /// Used to help improve capture usage and ease composition via extension methods.
     /// </summary>
-    internal sealed class DbStateHolder
+    internal sealed class DbStateHolder<TJournalPayload>
     {
-        public readonly AkkaPersistenceDataConnectionFactory ConnectionFactory;
+        public readonly AkkaPersistenceDataConnectionFactory<TJournalPayload> ConnectionFactory;
         public readonly IsolationLevel IsolationLevel;
         public readonly CancellationToken ShutdownToken;
         public readonly TagMode Mode;
         public DbStateHolder(
-            AkkaPersistenceDataConnectionFactory connectionFactory,
-            IsolationLevel isolationLevel, 
-            CancellationToken shutdownToken, 
+            AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
+            IsolationLevel isolationLevel,
+            CancellationToken shutdownToken,
             TagMode mode
         )
         {

@@ -11,7 +11,7 @@ using Akka.Persistence.Sql.Snapshot;
 
 namespace Akka.Persistence.Sql
 {
-    public sealed class SqlPersistence : IExtension
+    public sealed class SqlPersistence<TJournalPayload> : IExtension
     {
         public const string JournalConfigPath = "akka.persistence.journal.sql";
         public const string SnapshotStoreConfigPath = "akka.persistence.snapshot-store.sql";
@@ -34,8 +34,8 @@ namespace Akka.Persistence.Sql
 
         static SqlPersistence()
         {
-            var journalConfig = ConfigurationFactory.FromResource<SqlWriteJournal>("Akka.Persistence.Sql.persistence.conf");
-            var snapshotConfig = ConfigurationFactory.FromResource<SqlSnapshotStore>("Akka.Persistence.Sql.snapshot.conf");
+            var journalConfig = ConfigurationFactory.FromResource<SqlWriteJournal<TJournalPayload>>("Akka.Persistence.Sql.persistence.conf");
+            var snapshotConfig = ConfigurationFactory.FromResource<SqlSnapshotStore<TJournalPayload>>("Akka.Persistence.Sql.snapshot.conf");
 
             DefaultConfiguration = journalConfig.WithFallback(snapshotConfig);
 
@@ -51,15 +51,15 @@ namespace Akka.Persistence.Sql
         public SqlPersistence(ActorSystem system)
             => system.Settings.InjectTopLevelFallback(DefaultConfiguration);
 
-        public static SqlPersistence Get(ActorSystem system)
-            => system.WithExtension<SqlPersistence, SqlPersistenceProvider>();
+        public static SqlPersistence<TJournalPayload> Get(ActorSystem system)
+            => system.WithExtension<SqlPersistence<TJournalPayload>, SqlPersistenceProvider<TJournalPayload>>();
     }
 
     /// <summary>
     ///     Singleton class used to setup Linq2Db for akka persistence plugin.
     /// </summary>
-    public sealed class SqlPersistenceProvider : ExtensionIdProvider<SqlPersistence>
+    public sealed class SqlPersistenceProvider<TJournalPayload> : ExtensionIdProvider<SqlPersistence<TJournalPayload>>
     {
-        public override SqlPersistence CreateExtension(ExtendedActorSystem system) => new(system);
+        public override SqlPersistence<TJournalPayload> CreateExtension(ExtendedActorSystem system) => new(system);
     }
 }

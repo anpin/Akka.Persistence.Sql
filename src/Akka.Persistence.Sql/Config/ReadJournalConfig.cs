@@ -10,13 +10,13 @@ using Akka.Persistence.Sql.Extensions;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class ReadJournalConfig : IProviderConfig<JournalTableConfig>
+    public class ReadJournalConfig<TJournalPayload> : IProviderConfig<JournalTableConfig<TJournalPayload>>
     {
         public ReadJournalConfig(Configuration.Config config)
         {
             ConnectionString = config.GetString("connection-string");
             ProviderName = config.GetString("provider-name");
-            TableConfig = new JournalTableConfig(config);
+            TableConfig = new JournalTableConfig<TJournalPayload>(config);
             DaoConfig = new BaseByteArrayJournalDaoConfig(config);
             UseCloneConnection = config.GetBoolean("use-clone-connection");
             JournalSequenceRetrievalConfiguration = new JournalSequenceRetrievalConfig(config);
@@ -47,7 +47,7 @@ namespace Akka.Persistence.Sql.Config
 
         public string ConnectionString { get; }
 
-        public JournalTableConfig TableConfig { get; }
+        public JournalTableConfig<TJournalPayload> TableConfig { get; }
 
         public IDaoConfig IDaoConfig => DaoConfig;
 
