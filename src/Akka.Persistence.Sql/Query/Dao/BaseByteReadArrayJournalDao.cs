@@ -28,7 +28,7 @@ namespace Akka.Persistence.Sql.Query.Dao
 {
     public abstract class BaseByteReadArrayJournalDao<TJournalPayload> : BaseJournalDaoWithReadMessages<TJournalPayload>, IReadJournalDao
     {
-        private readonly Flow<JournalRow<TJournalPayload>, Try<(IPersistentRepresentation, string[], long)>, NotUsed> _deserializeFlow;
+        protected readonly Flow<JournalRow<TJournalPayload>, Try<(IPersistentRepresentation, string[], long)>, NotUsed> DeserializeFlow;
 
         private readonly ReadJournalConfig<TJournalPayload> _readJournalConfig;
         private readonly DbStateHolder<TJournalPayload> _dbStateHolder;
@@ -44,7 +44,7 @@ namespace Akka.Persistence.Sql.Query.Dao
         {
             _readJournalConfig = readJournalConfig;
             _dbStateHolder = new DbStateHolder<TJournalPayload>(connectionFactory, ReadIsolationLevel, ShutdownToken, _readJournalConfig.PluginConfig.TagMode);
-            _deserializeFlow = serializer.DeserializeFlow();
+            DeserializeFlow = serializer.DeserializeFlow();
         }
 
         public Source<string, NotUsed> AllPersistenceIdsSource(long max)
@@ -105,7 +105,7 @@ namespace Akka.Persistence.Sql.Query.Dao
                                         .ToListAsync(token);
                                 });
                         })
-                    .Via(_deserializeFlow),
+                    .Via(DeserializeFlow),
 
                 TagMode.TagTable => AsyncSource<JournalRow<TJournalPayload>>
                     .FromEnumerable(
@@ -129,7 +129,7 @@ namespace Akka.Persistence.Sql.Query.Dao
                                     return await AddTagDataFromTagTableAsync(query.Take(txInput.Max), connection, token);
                                 });
                         })
-                    .Via(_deserializeFlow),
+                    .Via(DeserializeFlow),
 
                 _ => throw new ArgumentOutOfRangeException($"TagMode {_readJournalConfig.PluginConfig.TagMode} is not supported for read journals"),
             };
@@ -164,7 +164,7 @@ namespace Akka.Persistence.Sql.Query.Dao
                                     return await AddTagDataIfNeededAsync(txState._dbStateHolder.Mode, query, connection, token);
                                 });
                         })
-                    .Via(_deserializeFlow)
+                    .Via(DeserializeFlow)
                     .Select(
                         t =>
                         {
@@ -238,7 +238,7 @@ namespace Akka.Persistence.Sql.Query.Dao
                 {
                     return await ExecuteEventQuery(input._dbStateHolder, input._dbStateHolder.Mode, input.args);
                 }
-            ).Via(_deserializeFlow);
+            ).Via(DeserializeFlow);
         }
 
 
