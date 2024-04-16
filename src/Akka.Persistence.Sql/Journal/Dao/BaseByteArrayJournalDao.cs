@@ -25,7 +25,7 @@ using LanguageExt;
 using LinqToDB;
 using LinqToDB.Data;
 using static LanguageExt.Prelude;
-
+using Akka.Persistence.Sql.Db;
 namespace Akka.Persistence.Sql.Journal.Dao
 {
     public abstract class BaseByteArrayJournalDao<TJournalPayload> : BaseJournalDaoWithReadMessages<TJournalPayload>, IJournalDaoWithUpdates
@@ -217,7 +217,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             return await ConnectionFactory.ExecuteWithTransactionAsync(
                 ReadIsolationLevel,
                 ShutdownToken,
-                async (connection, token) => (await MaxSeqNumberForPersistenceIdQuery(connection, persistenceId, fromSequenceNr).MaxAsync(token))
+                async (connection, token) => (await connection.MaxSeqNumberForPersistenceIdQuery(JournalConfig.DaoConfig.SqlCommonCompatibilityMode,persistenceId, fromSequenceNr).MaxAsync(token))
                     .GetValueOrDefault(0));
         }
 
@@ -445,81 +445,6 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 .Select(r => r.SequenceNumber)
                 .Take(1);
 
-        private IQueryable<long?> MaxSeqNumberForPersistenceIdQuery(
-            AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId,
-            long minSequenceNumber = 0)
-        {
-            if (minSequenceNumber != 0)
-            {
-                return JournalConfig.DaoConfig.SqlCommonCompatibilityMode
-                    ? MaxSeqForPersistenceIdQueryableCompatibilityModeWithMinId(
-                        connection,
-                        persistenceId,
-                        minSequenceNumber)
-                    : MaxSeqForPersistenceIdQueryableNativeModeMinId(
-                        connection,
-                        persistenceId,
-                        minSequenceNumber);
-            }
-
-            return JournalConfig.DaoConfig.SqlCommonCompatibilityMode
-                ? MaxSeqForPersistenceIdQueryableCompatibilityMode(connection, persistenceId)
-                : MaxSeqForPersistenceIdQueryableNativeMode(connection, persistenceId);
-        }
-
-        private static IQueryable<long?> MaxSeqForPersistenceIdQueryableNativeMode(
-            AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId)
-            => connection
-                .GetTable<JournalRow<TJournalPayload>>()
-                .Where(r => r.PersistenceId == persistenceId)
-                .Select(r => (long?)r.SequenceNumber);
-
-        private static IQueryable<long?> MaxSeqForPersistenceIdQueryableNativeModeMinId(
-            AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId,
-            long minSequenceNumber)
-            => connection
-                .GetTable<JournalRow<TJournalPayload>>()
-                .Where(
-                    r =>
-                        r.PersistenceId == persistenceId &&
-                        r.SequenceNumber > minSequenceNumber)
-                .Select(r => (long?)r.SequenceNumber);
-
-        private static IQueryable<long?> MaxSeqForPersistenceIdQueryableCompatibilityModeWithMinId(
-            AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId,
-            long minSequenceNumber)
-            => connection
-                .GetTable<JournalRow<TJournalPayload>>()
-                .Where(
-                    r =>
-                        r.PersistenceId == persistenceId &&
-                        r.SequenceNumber > minSequenceNumber)
-                .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue())
-                .Union(
-                    connection
-                        .GetTable<JournalMetaData>()
-                        .Where(
-                            r =>
-                                r.SequenceNumber > minSequenceNumber &&
-                                r.PersistenceId == persistenceId)
-                        .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue()));
-
-        private static IQueryable<long?> MaxSeqForPersistenceIdQueryableCompatibilityMode(
-            AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId)
-            => connection
-                .GetTable<JournalRow<TJournalPayload>>()
-                .Where(r => r.PersistenceId == persistenceId)
-                .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue())
-                .Union(
-                    connection
-                        .GetTable<JournalMetaData>()
-                        .Where(r => r.PersistenceId == persistenceId)
-                        .Select(r => LinqToDB.Sql.Ext.Max<long?>(r.SequenceNumber).ToValue()));
 
         private static Func<Util.Try<(IPersistentRepresentation, string[], long)>, Util.Try<ReplayCompletion>> MessageWithBatchMapper()
             => x => x.IsSuccess
