@@ -22,7 +22,7 @@ namespace Akka.Persistence.Sql.Query.Dao
             AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
             ReadJournalConfig<TJournalPayload> readJournalConfig,
             FlowPersistentRepresentationSerializer<JournalRow<TJournalPayload>> serializer,
-            CancellationToken token)
-            : base(scheduler, materializer, connectionFactory, readJournalConfig, serializer, token) { }
+            CancellationToken shutdownToken)
+            : base(scheduler, materializer, connectionFactory, readJournalConfig, serializer, shutdownToken) { }
     }
 }
