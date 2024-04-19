@@ -148,7 +148,7 @@ namespace Akka.Persistence.Sql.Query.Dao
                         {
                             return await state._dbStateHolder.ExecuteWithTransactionAsync(
                                 state,
-                                async (connection, token, txState) =>
+                                static async (connection, token, txState) =>
                                 {
                                     var query = connection
                                         .GetTable<JournalRow<TJournalPayload>>()
@@ -207,7 +207,7 @@ namespace Akka.Persistence.Sql.Query.Dao
             return await ConnectionFactory.ExecuteWithTransactionAsync(
                 ReadIsolationLevel,
                 ShutdownToken,
-                async (connection, token) =>
+                static async (connection, token) =>
                 {
                     // persistence-jdbc does not filter deleted here.
                     var result = await connection
