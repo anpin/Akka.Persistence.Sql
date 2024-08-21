@@ -107,7 +107,7 @@ namespace Akka.Persistence.Sql.Db
                 typeof(TJournalPayload) switch
                 {
                     { } t when t == typeof(string) => DataType.BinaryJson,
-                    { } t when t == typeof(byte[]) => DataType.Byte,
+                    { } t when t == typeof(byte[]) => DataType.Blob,
                     _ => throw new ArgumentOutOfRangeException(nameof(TJournalPayload), typeof(TJournalPayload), "This type of payload is not supported)"),
                 });
 
