@@ -10,15 +10,15 @@ using LanguageExt;
 
 namespace Akka.Persistence.Sql.Journal.Types
 {
-    public sealed class WriteQueueSet
+    public sealed class WriteQueueSet<T>
     {
-        public WriteQueueSet(ImmutableList<TaskCompletionSource<NotUsed>> tcs, Seq<JournalRow> rows)
+        public WriteQueueSet(ImmutableList<TaskCompletionSource<NotUsed>> tcs, Seq<JournalRow<T>> rows)
         {
             Tcs = tcs;
             Rows = rows;
         }
 
-        public Seq<JournalRow> Rows { get; }
+        public Seq<JournalRow<T>> Rows { get; }
 
         public ImmutableList<TaskCompletionSource<NotUsed>> Tcs { get; }
     }

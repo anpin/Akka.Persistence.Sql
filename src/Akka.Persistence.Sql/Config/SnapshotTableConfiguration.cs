@@ -9,7 +9,7 @@ using Akka.Configuration;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class SnapshotTableConfiguration
+    public class SnapshotTableConfiguration<TJournalPayload>
     {
         public SnapshotTableConfiguration(Configuration.Config config)
         {
@@ -22,7 +22,7 @@ namespace Akka.Persistence.Sql.Config
                 $"The configuration path akka.persistence.journal.sql.{mappingPath} does not exist");
 
             if (mappingPath != "default")
-                mappingConfig.WithFallback(SqlPersistence.DefaultSnapshotMappingConfiguration);
+                mappingConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultSnapshotMappingConfiguration);
 
             SchemaName = mappingConfig.GetString("schema-name");
 

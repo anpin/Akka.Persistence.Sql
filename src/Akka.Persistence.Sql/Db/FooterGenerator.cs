@@ -12,7 +12,7 @@ namespace Akka.Persistence.Sql.Db
 {
     public static class FooterGenerator
     {
-        public static string? GenerateJournalFooter(this JournalConfig config)
+        public static string? GenerateJournalFooter<TJournalPayload>(this JournalConfig<TJournalPayload> config)
         {
             var tableName = config.TableConfig.EventJournalTable.Name;
             var columns = config.TableConfig.EventJournalTable.ColumnNames;
@@ -45,7 +45,7 @@ CREATE INDEX IX_{tableName}_{columns.SequenceNumber} ON {journalFullTableName}({
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
-    WHERE 
+    WHERE
         object_id = OBJECT_ID('{journalFullTableName}') AND
         name = 'IX_{tableName}_{columns.Created}'
 )
@@ -65,7 +65,7 @@ SET @akka_journal_setup = IF(
         	TABLE_NAME = '{tableName}' AND
         	CONSTRAINT_NAME   = '{columns.PersistenceId}' AND
         	CONSTRAINT_TYPE   = 'UNIQUE'
-	), 
+	),
 	'SELECT ''Unique constraint already exist. Skipping.'';',
 	'ALTER TABLE {journalFullTableName} ADD UNIQUE ({columns.PersistenceId}, {columns.SequenceNumber})'
 );
@@ -78,7 +78,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.Created}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.Created}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.Created}_idx ON {journalFullTableName} ({columns.Created})'
 );
@@ -91,7 +91,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.SequenceNumber}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.SequenceNumber}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.SequenceNumber}_idx ON {journalFullTableName} ({columns.SequenceNumber})'
 );
@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS {tableName}_{columns.SequenceNumber}_idx ON {journalF
             return null;
         }
 
-        public static string? GenerateTagFooter(this JournalConfig config)
+        public static string? GenerateTagFooter<TJournalPayload>(this JournalConfig<TJournalPayload> config)
         {
             var tableName = config.TableConfig.TagTable.Name;
             var columns = config.TableConfig.TagTable.ColumnNames;
@@ -162,7 +162,7 @@ CREATE INDEX IF NOT EXISTS {tableName}_{columns.SequenceNumber}_idx ON {journalF
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
-    WHERE 
+    WHERE
         object_id = OBJECT_ID('{tagFullTableName}') AND
         name = 'IX_{tableName}_{columns.PersistenceId}_{columns.SequenceNumber}'
 )
@@ -171,7 +171,7 @@ CREATE INDEX IX_{tableName}_{columns.PersistenceId}_{columns.SequenceNumber} ON 
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
-    WHERE 
+    WHERE
         object_id = OBJECT_ID('{tagFullTableName}') AND
         name = 'IX_{tableName}_{columns.Tag}'
 )
@@ -188,7 +188,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.PersistenceId}_{columns.SequenceNumber}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.PersistenceId}_{columns.SequenceNumber}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.PersistenceId}_{columns.SequenceNumber}_idx ON {tagFullTableName} ({columns.PersistenceId}, {columns.SequenceNumber})'
 );
@@ -201,7 +201,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.Tag}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.Tag}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.Tag}_idx ON {tagFullTableName} ({columns.Tag})'
 );
@@ -250,7 +250,7 @@ CREATE INDEX IF NOT EXISTS {tableName}_{columns.Tag}_idx ON {tagFullTableName} (
             return null;
         }
 
-        public static string? GenerateSnapshotFooter(this SnapshotConfig config)
+        public static string? GenerateSnapshotFooter<TJournalPayload>(this SnapshotConfig<TJournalPayload> config)
         {
             var tableName = config.TableConfig.SnapshotTable.Name;
             var columns = config.TableConfig.SnapshotTable.ColumnNames;
@@ -273,7 +273,7 @@ CREATE INDEX IX_{tableName}_{columns.SequenceNumber} ON {fullTableName}({columns
 IF NOT EXISTS (
     SELECT 1
     FROM sys.indexes
-    WHERE 
+    WHERE
         object_id = OBJECT_ID('{fullTableName}') AND
         name = 'IX_{tableName}_{columns.Created}'
 )
@@ -289,7 +289,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.SequenceNumber}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.SequenceNumber}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.SequenceNumber}_idx ON {fullTableName} ({columns.SequenceNumber})'
 );
@@ -302,7 +302,7 @@ SET @akka_journal_setup = IF(
 		SELECT 1
 		FROM information_schema.INNODB_INDEXES
 		WHERE NAME = '{tableName}_{columns.Created}_idx'
-	), 
+	),
 	'SELECT ''Index {tableName}_{columns.Created}_idx already exist. Skipping.'';',
 	'CREATE INDEX {tableName}_{columns.Created}_idx ON {fullTableName} ({columns.Created})'
 );
