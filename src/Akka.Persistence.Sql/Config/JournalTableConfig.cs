@@ -36,7 +36,7 @@ namespace Akka.Persistence.Sql.Config
             TagTable = new TagTableConfig(mappingConfig);
         }
 
-        public string SchemaName { get; }
+        public string? SchemaName { get; }
 
         // TODO: implement this settings
         public bool UseEventManifestColumn { get; } = false;
@@ -56,12 +56,14 @@ namespace Akka.Persistence.Sql.Config
             if (ReferenceEquals(this, other))
                 return true;
 
-            return Equals(EventJournalTable, other.EventJournalTable) &&
-                   Equals(MetadataTable, other.MetadataTable) &&
+            return EventJournalTable.Equals(other.EventJournalTable) &&
+                   MetadataTable.Equals(other.MetadataTable) &&
+                   TagTable.Equals(other.TagTable) &&
+                   UseEventManifestColumn == other.UseEventManifestColumn &&
                    SchemaName == other.SchemaName;
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (ReferenceEquals(null, obj))
                 return false;
@@ -73,6 +75,6 @@ namespace Akka.Persistence.Sql.Config
         }
 
         public override int GetHashCode()
-            => HashCode.Combine(EventJournalTable, SchemaName, MetadataTable);
+            => HashCode.Combine(EventJournalTable, UseEventManifestColumn, SchemaName, MetadataTable, TagTable);
     }
 }

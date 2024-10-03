@@ -12,7 +12,6 @@ using Akka.Persistence.Sql.Journal.Types;
 using Akka.Persistence.Sql.Snapshot;
 using LinqToDB;
 using LinqToDB.Data;
-using LinqToDB.Data.RetryPolicy;
 using LinqToDB.DataProvider.SqlServer;
 using LinqToDB.Mapping;
 
@@ -22,43 +21,35 @@ namespace Akka.Persistence.Sql.Db
     {
         private readonly Lazy<AkkaDataConnection<TJournalPayload>> _cloneConnection;
         private readonly DataOptions _opts;
-        private readonly IRetryPolicy _policy;
         private readonly bool _useCloneDataConnection;
 
-        public AkkaPersistenceDataConnectionFactory(Utility.LinqToDBLoggerAdapter loggingAdapter, IProviderConfig<JournalTableConfig<TJournalPayload>> config)
+        public AkkaPersistenceDataConnectionFactory(IProviderConfig<JournalTableConfig<TJournalPayload>> config)
         {
             // Build Mapping Schema to be used for all connections.
             // Make a unique mapping schema name here to avoid problems
             // with multiple configurations using different schemas.
-            var configName = "akka.persistence.l2db." + HashCode.Combine(
-                config.ConnectionString,
-                config.ProviderName,
-                config.TableConfig.GetHashCode());
+            var configName = "akka.persistence.sql." + ( config.DataOptions is not null
+                ? HashCode.Combine(config.DataOptions.GetHashCode(), config.TableConfig.GetHashCode())
+                : HashCode.Combine(config.ConnectionString, config.ProviderName, config.TableConfig.GetHashCode()) );
 
             var mappingSchema = new MappingSchema(configName, MappingSchema.Default);
 
+            _opts = BuildDataOptions(config, mappingSchema);
+
             var fmb = new FluentMappingBuilder(mappingSchema);
-            MapJournalRow(config, fmb);
+            MapJournalRow(config, fmb, _opts.ConnectionOptions.ProviderName!);
             MapMetadataRow(config, fmb);
-            MapTagRow(config, fmb);
+            MapTagRow(config, fmb, _opts.ConnectionOptions.ProviderName!);
             fmb.Build();
 
             _useCloneDataConnection = config.UseCloneConnection;
 
-            DataConnection.TurnTraceSwitchOn(TraceLevel.Verbose);
-            var opts = new DataOptions()
-                .UseTracing(TraceLevel.Verbose, loggingAdapter.OnTrace)
-                .UseConnectionString(config.ProviderName, config.ConnectionString)
-                .UseMappingSchema(mappingSchema);
-            _opts = opts;
-
-            if (config.ProviderName.ToLower().StartsWith("sqlserver"))
-                _policy = new SqlServerRetryPolicy();
-
+            if (_opts.RetryPolicyOptions.RetryPolicy is null && _opts.ConnectionOptions.ProviderName!.ToLowerInvariant().StartsWith("sqlserver"))
+                _opts = _opts.WithOptions( _opts.RetryPolicyOptions with { RetryPolicy = new SqlServerRetryPolicy() } );
 
             _cloneConnection = new Lazy<AkkaDataConnection<TJournalPayload>>(
                 () => new AkkaDataConnection<TJournalPayload>(
-                    _opts.ConnectionOptions.ProviderName,
+                    config.ProviderName,
                     new DataConnection(_opts)));
         }
 
@@ -67,39 +58,35 @@ namespace Akka.Persistence.Sql.Db
             // Build Mapping Schema to be used for all connections.
             // Make a unique mapping schema name here to avoid problems
             // with multiple configurations using different schemas.
-            var configName = "akka.persistence.l2db." + HashCode.Combine(
-                config.ConnectionString,
-                config.ProviderName,
-                config.TableConfig.GetHashCode());
+            var configName = "akka.persistence.sql." + ( config.DataOptions is not null
+                ? HashCode.Combine(config.DataOptions.GetHashCode(), config.TableConfig.GetHashCode())
+                : HashCode.Combine(config.ConnectionString, config.ProviderName, config.TableConfig.GetHashCode()) );
 
             var mappingSchema = new MappingSchema(configName, MappingSchema.Default);
+            _opts = BuildDataOptions(config, mappingSchema);
 
             var fmb = new FluentMappingBuilder(mappingSchema);
 
-            if (config.ProviderName.ToLower().Contains("sqlserver"))
+            if (_opts.ConnectionOptions.ProviderName!.ToLowerInvariant().Contains("sqlserver"))
             {
-                MapDateTimeSnapshotRow(config, fmb);
+                MapDateTimeSnapshotRow(config, fmb, _opts.ConnectionOptions.ProviderName!);
             }
             else
             {
-                MapLongSnapshotRow(config, fmb);
+                MapLongSnapshotRow(config, fmb, _opts.ConnectionOptions.ProviderName!);
             }
 
             fmb.Build();
 
             _useCloneDataConnection = config.UseCloneConnection;
-            var opts = new DataOptions()
-                .UseConnectionString(config.ProviderName, config.ConnectionString)
-                .UseMappingSchema(mappingSchema);
 
-            _opts = opts;
-            if (config.ProviderName.ToLower().StartsWith("sqlserver"))
-                _policy = new SqlServerRetryPolicy();
+            if (_opts.RetryPolicyOptions.RetryPolicy is null && _opts.ConnectionOptions.ProviderName!.ToLowerInvariant().StartsWith("sqlserver"))
+                _opts = _opts.WithOptions( _opts.RetryPolicyOptions with { RetryPolicy = new SqlServerRetryPolicy() } );
 
             _cloneConnection = new Lazy<AkkaDataConnection<TJournalPayload>>(
                 () => new AkkaDataConnection<TJournalPayload>(
-                    opts.ConnectionOptions.ProviderName,
-                    new DataConnection(opts)));
+                    config.ProviderName,
+                    new DataConnection(_opts)));
         }
 
         private static Lazy<DataType> MessageType = new(
@@ -113,7 +100,8 @@ namespace Akka.Persistence.Sql.Db
 
         private static void MapJournalRow(
             IProviderConfig<JournalTableConfig<TJournalPayload>> config,
-            FluentMappingBuilder fmb)
+            FluentMappingBuilder fmb,
+            string providerName)
         {
             var tableConfig = config.TableConfig;
             var journalConfig = tableConfig.EventJournalTable;
@@ -160,18 +148,25 @@ namespace Akka.Persistence.Sql.Db
                 .Member(r => r.TagArray)
                 .IsNotColumn();
 
-            if (config.ProviderName.StartsWith(ProviderName.MySql))
+            if (providerName.StartsWith(ProviderName.MySql))
             {
                 rowBuilder
                     .Member(r => r.Message)
                     .HasDbType("LONGBLOB");
             }
 
-            if (config.ProviderName.ToLower().Contains("sqlite"))
+            if (providerName.ToLower().Contains("sqlite"))
             {
                 rowBuilder
                     .Member(r => r.Ordering)
                     .HasDbType("INTEGER");
+            }
+
+            if (providerName.Equals(ProviderName.PostgreSQL15))
+            {
+                rowBuilder
+                    .Member(r => r.Ordering)
+                    .HasDbType("BIGINT GENERATED ALWAYS AS IDENTITY");
             }
 
             if (journalConfig.UseWriterUuidColumn)
@@ -250,7 +245,8 @@ namespace Akka.Persistence.Sql.Db
 
         private static void MapTagRow(
             IProviderConfig<JournalTableConfig<TJournalPayload>> config,
-            FluentMappingBuilder fmb)
+            FluentMappingBuilder fmb,
+            string providerName)
         {
             if (config.PluginConfig.TagMode is TagMode.Csv)
                 return;
@@ -286,7 +282,7 @@ namespace Akka.Persistence.Sql.Db
                 .HasColumnName(columnNames.SequenceNumber)
                 .IsNullable(false);
 
-            if (config.ProviderName.ToLower().Contains("sqlite"))
+            if (providerName.ToLower().Contains("sqlite"))
             {
                 rowBuilder
                     .Member(r => r.OrderingId)
@@ -299,7 +295,8 @@ namespace Akka.Persistence.Sql.Db
 
         private static void MapDateTimeSnapshotRow(
             IProviderConfig<SnapshotTableConfiguration<TJournalPayload>> config,
-            FluentMappingBuilder fmb)
+            FluentMappingBuilder fmb,
+            string providerName)
         {
             var tableConfig = config.TableConfig;
             var snapshotConfig = tableConfig.SnapshotTable;
@@ -333,7 +330,7 @@ namespace Akka.Persistence.Sql.Db
                 .Member(r => r.SerializerId)
                 .HasColumnName(snapshotConfig.ColumnNames.SerializerId);
 
-            if (config.ProviderName.StartsWith(ProviderName.MySql))
+            if (providerName.StartsWith(ProviderName.MySql))
             {
                 rowBuilder
                     .Member(r => r.Payload)
@@ -350,7 +347,8 @@ namespace Akka.Persistence.Sql.Db
 
         private static void MapLongSnapshotRow(
             IProviderConfig<SnapshotTableConfiguration<TJournalPayload>> config,
-            FluentMappingBuilder fmb)
+            FluentMappingBuilder fmb,
+            string providerName)
         {
             var tableConfig = config.TableConfig;
             var snapshotConfig = tableConfig.SnapshotTable;
@@ -379,13 +377,13 @@ namespace Akka.Persistence.Sql.Db
                 .HasLength(500)
 
                 .Member(r => r.Payload)
-                .HasDataType(DataType.BinaryJson)
+                .HasDataType(MessageType.Value)
                 .HasColumnName(snapshotConfig.ColumnNames.Snapshot)
 
                 .Member(r => r.SerializerId)
                 .HasColumnName(snapshotConfig.ColumnNames.SerializerId);
 
-            if (config.ProviderName.StartsWith(ProviderName.MySql))
+            if (providerName.StartsWith(ProviderName.MySql))
             {
                 rowBuilder
                     .Member(r => r.Payload)
@@ -400,19 +398,23 @@ namespace Akka.Persistence.Sql.Db
             }
         }
 
+        private static DataOptions BuildDataOptions<TTable>(IProviderConfig<TTable> config, MappingSchema mappingSchema)
+        {
+            // LinqToDB.Data.DataConnection.ConfigurationApplier extracts different combinations therefore we can't
+            // just override the connection string or the provider name. If data options are set, we assume that a valid
+            // connection can be created.
+            var options = config.DataOptions ?? new DataOptions().UseConnectionString(config.ProviderName, config.ConnectionString);
+            return options.UseMappingSchema(mappingSchema);
+        }
+
         public AkkaDataConnection<TJournalPayload> GetConnection()
         {
             if (!_useCloneDataConnection)
                 return new AkkaDataConnection<TJournalPayload>(
-                    _opts.ConnectionOptions.ProviderName,
-                    new DataConnection(_opts)
-                    {
-                        RetryPolicy = _policy,
-                    });
+                    _opts.ConnectionOptions.ProviderName!,
+                    new DataConnection(_opts));
 
-            var connection = _cloneConnection.Value.Clone();
-            connection.RetryPolicy = _policy;
-            return connection;
+            return _cloneConnection.Value.Clone();
         }
     }
 }

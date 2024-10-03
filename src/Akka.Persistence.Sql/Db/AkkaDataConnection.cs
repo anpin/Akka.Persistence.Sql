@@ -12,7 +12,6 @@ using Akka.Persistence.Sql.Journal.Types;
 using Akka.Persistence.Sql.Snapshot;
 using LinqToDB;
 using LinqToDB.Data;
-using LinqToDB.Data.RetryPolicy;
 using LinqToDB.DataProvider;
 using LinqToDB.SchemaProvider;
 
@@ -36,12 +35,6 @@ namespace Akka.Persistence.Sql.Db
 
         public IDataProvider DataProvider => _connection.DataProvider;
 
-        public IRetryPolicy RetryPolicy
-        {
-            get => _connection.RetryPolicy;
-            set => _connection.RetryPolicy = value;
-        }
-
         public ValueTask DisposeAsync()
             => _connection.DisposeAsync();
 
@@ -54,13 +47,13 @@ namespace Akka.Persistence.Sql.Db
         public DatabaseSchema GetSchema()
             => _connection.DataProvider.GetSchemaProvider().GetSchema(_connection);
 
-        public ITable<T> CreateTable<T>()
+        public ITable<T> CreateTable<T>() where T : notnull
             => _connection.CreateTable<T>();
 
         public async Task CreateTableAsync<T>(
             TableOptions tableOptions,
-            string statementFooter = default,
-            CancellationToken cancellationToken = default)
+            string? statementFooter = default,
+            CancellationToken cancellationToken = default) where T : notnull
             => await _connection.CreateTableAsync<T>(
                 tableOptions: tableOptions,
                 statementFooter: statementFooter,

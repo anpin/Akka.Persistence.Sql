@@ -27,7 +27,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
         private readonly string[] _separatorArray;
         private readonly Akka.Serialization.Serialization _serializer;
         private readonly TagMode _tagWriteMode;
-        private readonly string _writerUuid;
+        private readonly string? _writerUuid;
         private readonly Func<(Serializer, object), TJournalPayload> _toPayload;
         private readonly Func<(Serializer, TJournalPayload, Type), object> _fromPayload;
 
@@ -36,7 +36,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             IProviderConfig<JournalTableConfig<TJournalPayload>> journalConfig,
             Akka.Serialization.Serialization serializer,
             string separator,
-            string writerUuid,
+            string? writerUuid,
             Func<(Serializer, object), TJournalPayload> toPayload,
             Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
@@ -69,7 +69,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             long timestamp,
             TagMode tagWriteMode,
             string separator,
-            string uuid)
+            string? uuid)
             => tagWriteMode switch
             {
                 TagMode.Csv => new JournalRow<TJournalPayload>
@@ -150,6 +150,10 @@ namespace Akka.Persistence.Sql.Journal.Dao
             try
             {
                 var identifierMaybe = t.Identifier;
+                var tags = t.Tags?.Split(_separatorArray, StringSplitOptions.RemoveEmptyEntries);
+                if (tags is null || tags.Length == 0)
+                    tags = t.TagArray;
+
                 if (identifierMaybe.HasValue && t.Message is byte[] bm)
                 {
                     // TODO: hack. Replace when https://github.com/akkadotnet/akka.net/issues/3811
@@ -164,7 +168,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                                 sender: ActorRefs.NoSender,
                                 writerGuid: t.WriterUuid,
                                 timestamp: t.Timestamp),
-                            t.Tags?.Split(_separatorArray, StringSplitOptions.RemoveEmptyEntries) ?? t.TagArray ?? Array.Empty<string>(),
+                            tags,
                             t.Ordering));
                 }
 
@@ -185,8 +189,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                             sender: ActorRefs.NoSender,
                             writerGuid: t.WriterUuid,
                             timestamp: t.Timestamp),
-                        t.Tags?
-                            .Split(_separatorArray, StringSplitOptions.RemoveEmptyEntries) ?? t.TagArray ?? Array.Empty<string>(),
+                        tags,
                         t.Ordering));
             }
             catch (Exception e)

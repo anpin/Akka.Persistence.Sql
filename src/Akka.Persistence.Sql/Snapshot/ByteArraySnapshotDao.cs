@@ -7,6 +7,7 @@
 using System;
 using System.Data;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Akka.Event;
@@ -361,6 +362,7 @@ namespace Akka.Persistence.Sql.Snapshot
         public async Task DeleteAsync(
             string persistenceId,
             long sequenceNr,
+            DateTime timestamp,
             CancellationToken cancellationToken = default)
         {
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
@@ -371,22 +373,31 @@ namespace Akka.Persistence.Sql.Snapshot
                 {
                     if (connection.UseDateTime)
                     {
-                        await connection
-                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
-                            .Where(
-                                r =>
-                                    r.PersistenceId == persistenceId &&
-                                    r.SequenceNumber == sequenceNr)
+                        var query = connection.GetTable<DateTimeSnapshotRow<TJournalPayload>>()
+                                .Where(
+                                    r =>
+                                        r.PersistenceId == persistenceId &&
+                                        r.SequenceNumber == sequenceNr);
+
+                        if (timestamp > DateTime.MinValue)
+                            query = query.Where(r => r.Created <= timestamp);
+
+                        await query
                             .DeleteAsync(token);
                     }
                     else
                     {
-                        await connection
-                            .GetTable<LongSnapshotRow<TJournalPayload>>()
+                        var query = connection
+                            .GetTable<DateTimeSnapshotRow<TJournalPayload>>()
                             .Where(
                                 r =>
                                     r.PersistenceId == persistenceId &&
-                                    r.SequenceNumber == sequenceNr)
+                                    r.SequenceNumber == sequenceNr);
+
+                        if (timestamp > DateTime.MinValue)
+                            query = query.Where((DateTimeSnapshotRow<TJournalPayload> r) => r.Created <= timestamp);
+
+                        await query
                             .DeleteAsync(token);
                     }
                 });

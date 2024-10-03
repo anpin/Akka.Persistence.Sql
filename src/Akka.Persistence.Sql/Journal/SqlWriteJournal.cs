@@ -58,9 +58,9 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
 
     private readonly Dictionary<string, Task> _writeInProgress = new();
 
-    private ByteArrayJournalDao<TJournalPayload> _journal;
+    private ByteArrayJournalDao<TJournalPayload>? _journal;
 
-    private ActorMaterializer _mat;
+    private ActorMaterializer? _mat;
 
     public SqlWriteJournal(
         Configuration.Config journalConfig,
@@ -72,6 +72,19 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
 
         var config = journalConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultJournalConfiguration);
         _journalConfig = new JournalConfig<TJournalPayload>(config);
+
+        var setup = Context.System.Settings.Setup;
+        var singleSetup = setup.Get<DataOptionsSetup<TJournalPayload>>();
+        if (singleSetup.HasValue)
+            _journalConfig = singleSetup.Value.Apply(_journalConfig);
+
+        if (_journalConfig.PluginId is not null)
+        {
+            var multiSetup = setup.Get<MultiDataOptionsSetup>();
+            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_journalConfig.PluginId, out var dataOptions))
+                _journalConfig = _journalConfig.WithDataOptions(dataOptions);
+        }
+
         _useWriterUuid = _journalConfig.TableConfig.EventJournalTable.UseWriterUuidColumn;
         _toPayload = toPayload;
         _fromPayload = fromPayload;
@@ -79,7 +92,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
 
     // Stash is needed because we need to stash all incoming messages while we're waiting for the
     // journal DAO to be properly initialized.
-    public IStash Stash { get; set; }
+    public IStash Stash { get; set; } = null!;
 
     protected override void PreStart()
     {
@@ -110,11 +123,10 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
                     .Create(Context.System)
                     .WithDispatcher(_journalConfig.MaterializerDispatcher),
                 namePrefix: "l2dbWriteJournal");
-            var loggingAdapter = new LinqToDBLoggerAdapter(Context.System.Log);
             _journal = new ByteArrayJournalDao<TJournalPayload>(
                 scheduler: Context.System.Scheduler.Advanced,
                 mat: _mat,
-                connection: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(loggingAdapter, _journalConfig),
+                connection: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(_journalConfig),
                 journalConfig: _journalConfig,
                 serializer: Context.System.Serialization,
                 logger: Context.GetLogger(),
@@ -148,16 +160,15 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
                 Stash.UnstashAll();
                 return true;
 
-            case Status.Failure fail:
-                _log.Error(fail.Cause, "Failure during {0} initialization.", Self);
-                Context.Stop(Self);
-                return true;
-
-            default:
-                Stash.Stash();
-                return true;
+                case Status.Failure fail:
+                    _log.Error(fail.Cause, "Failure during {0} initialization.", Self);
+                    // trigger a restart so we have some hope of succeeding in the future even if initialization failed
+                    throw new ApplicationException("Failed to initialize SQL Journal.", fail.Cause);
+                default:
+                    Stash.Stash();
+                    return true;
+            }
         }
-    }
 
     protected override bool ReceivePluginInternal(object message)
     {
@@ -180,7 +191,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         }
     }
 
-    public override void AroundPreRestart(Exception cause, object message)
+    public override void AroundPreRestart(Exception cause, object? message)
     {
         _log.Error(cause, $"Sql Journal Error on {message?.GetType().ToString() ?? "null"}");
         base.AroundPreRestart(cause, message);
@@ -193,7 +204,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         long toSequenceNr,
         long max,
         Action<IPersistentRepresentation> recoveryCallback)
-        => await _journal
+        => await _journal!
             .MessagesWithBatch(
                 persistenceId: persistenceId,
                 fromSequenceNr: fromSequenceNr,
@@ -217,7 +228,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
             await new NoThrowAwaiter(wip);
         }
 
-        return await _journal.HighestSequenceNr(persistenceId, fromSequenceNr);
+        return await _journal!.HighestSequenceNr(persistenceId, fromSequenceNr);
     }
 
     protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
@@ -228,7 +239,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         var messagesList = messages.ToList();
         var persistenceId = messagesList.Head().PersistenceId;
 
-        var future = _journal.AsyncWriteMessages(messagesList, currentTime);
+        var future = _journal!.AsyncWriteMessages(messagesList, currentTime);
 
         _writeInProgress[persistenceId] = future;
         var self = Self;
@@ -246,5 +257,5 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
     }
 
     protected override async Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
-        => await _journal.Delete(persistenceId, toSequenceNr);
+        => await _journal!.Delete(persistenceId, toSequenceNr);
 }

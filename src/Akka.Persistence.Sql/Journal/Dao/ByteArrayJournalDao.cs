@@ -27,7 +27,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             JournalConfig<TJournalPayload> journalConfig,
             Akka.Serialization.Serialization serializer,
             ILoggingAdapter logger,
-            string selfUuid,
+            string? selfUuid,
             CancellationToken shutdownToken,
             Func<(Serializer, object), TJournalPayload> toPayload,
             Func<(Serializer, TJournalPayload, Type), object> fromPayload)

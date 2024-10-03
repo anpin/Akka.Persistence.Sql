@@ -41,6 +41,17 @@ public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedSt
         var config = snapshotConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultSnapshotConfiguration);
         _settings = new SnapshotConfig<TJournalPayload>(config);
 
+        var setup = Context.System.Settings.Setup;
+        var singleSetup = setup.Get<DataOptionsSetup<TJournalPayload>>();
+        if (singleSetup.HasValue)
+            _settings = singleSetup.Value.Apply(_settings);
+        if (_settings.PluginId is not null)
+        {
+            var multiSetup = setup.Get<MultiDataOptionsSetup>();
+            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_settings.PluginId, out var dataOptions))
+                _settings = _settings.WithDataOptions(dataOptions);
+        }
+
         _dao = new ByteArraySnapshotDao<TJournalPayload>(
             connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(_settings),
             snapshotConfig: _settings,
@@ -123,7 +134,7 @@ public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedSt
         => await _dao.SaveAsync(metadata, snapshot);
 
     protected override async Task DeleteAsync(SnapshotMetadata metadata)
-        => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr);
+        => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr, metadata.Timestamp);
 
     protected override async Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria)
     {

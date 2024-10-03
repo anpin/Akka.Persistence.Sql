@@ -40,8 +40,7 @@ namespace Akka.Persistence.Sql.Query
                     new ByteArrayReadJournalDao<TJournalPayload>(
                         scheduler: system.Scheduler.Advanced,
                         materializer: mat,
-                        connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(
-                            new LinqToDBLoggerAdapter(system.Log), readJournalConfig),
+                        connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(readJournalConfig),
                         readJournalConfig: readJournalConfig,
                         serializer: new ByteArrayJournalSerializer<TJournalPayload>(
                             journalConfig: readJournalConfig,
@@ -88,6 +87,19 @@ namespace Akka.Persistence.Sql.Query
         )
         {
             ReadJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
+
+            var setup = system.Settings.Setup;
+            var singleSetup = setup.Get<DataOptionsSetup<TJournalPayload>>();
+            if (singleSetup.HasValue)
+                ReadJournalConfig = singleSetup.Value.Apply(ReadJournalConfig);
+
+            if (ReadJournalConfig.PluginId is not null)
+            {
+                var multiSetup = setup.Get<MultiDataOptionsSetup>();
+                if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(ReadJournalConfig.PluginId, out var dataOptions))
+                    ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions);
+            }
+
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(ReadJournalConfig.WritePluginId);
 
             // Fix for https://github.com/akkadotnet/Akka.Persistence.Sql/issues/344
@@ -321,8 +333,7 @@ namespace Akka.Persistence.Sql.Query
                             var nextStartingOffset = xs.Count == 0
                                 ? Math.Max(uf.offset, queryUntil.Max)
                                 : xs.Select(r => r.Offset as Sequence)
-                                    .Where(r => r != null)
-                                    .Max(t => t.Value);
+                                    .Max(t => t?.Value ?? long.MinValue);
 
                             return Option<((long, FlowControlEnum), IImmutableList<EventEnvelope>)>.Create(
                                 ((nextStartingOffset, nextControl), xs));
@@ -394,8 +405,7 @@ namespace Akka.Persistence.Sql.Query
                             var nextStartingOffset = xs.Count == 0
                                 ? Math.Max(uf.offset, queryUntil.Max)
                                 : xs.Select(r => r.Offset as Sequence)
-                                    .Where(r => r != null)
-                                    .Max(t => t.Value);
+                                    .Max(t => t?.Value ?? long.MinValue);
 
                             return Option<((long nextStartingOffset, FlowControlEnum nextControl),
                                 IImmutableList<EventEnvelope>xs)>.Create(

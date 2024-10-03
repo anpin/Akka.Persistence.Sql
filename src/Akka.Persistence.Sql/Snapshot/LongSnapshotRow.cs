@@ -4,6 +4,7 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using LinqToDB;
 using LinqToDB.Mapping;
 
@@ -13,7 +14,7 @@ namespace Akka.Persistence.Sql.Snapshot
     {
         [PrimaryKey]
         [NotNull]
-        public string PersistenceId { get; set; }
+        public string PersistenceId { get; set; } = string.Empty;
 
         [PrimaryKey]
         public long SequenceNumber { get; set; }
@@ -23,7 +24,7 @@ namespace Akka.Persistence.Sql.Snapshot
 
         public TPayload Payload { get; set; }
 
-        public string Manifest { get; set; }
+        public string Manifest { get; set; } = string.Empty;
 
         public int? SerializerId { get; set; }
     }

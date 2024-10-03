@@ -9,7 +9,7 @@ using Akka.Configuration;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class SnapshotTableConfiguration<TJournalPayload>
+    public class SnapshotTableConfiguration<TJournalPayload>: IEquatable<SnapshotTableConfiguration<TJournalPayload>>
     {
         public SnapshotTableConfiguration(Configuration.Config config)
         {
@@ -31,7 +31,29 @@ namespace Akka.Persistence.Sql.Config
 
         public SnapshotTableConfig SnapshotTable { get; }
 
-        public string SchemaName { get; }
+        public string? SchemaName { get; }
+
+        public bool Equals(SnapshotTableConfiguration<TJournalPayload>? other)
+        {
+            if (other is null)
+                return false;
+
+            if (ReferenceEquals(this, other))
+                return true;
+
+            return SnapshotTable.Equals(other.SnapshotTable) && SchemaName == other.SchemaName;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            if (obj is null)
+                return false;
+
+            if (ReferenceEquals(this, obj))
+                return true;
+
+            return obj is SnapshotTableConfiguration<TJournalPayload> other && Equals(other);
+        }
 
         public override int GetHashCode()
             => HashCode.Combine(SnapshotTable, SchemaName);
