@@ -23,7 +23,12 @@ public class LinqToDBLoggerAdapter
         _ => LogLevel.DebugLevel,
     };
     public void OnTrace(TraceInfo traceInfo) =>
-        _akkaLogger.Log(ConvertLevel(traceInfo.TraceLevel), traceInfo.Exception,   traceInfo.SqlText  );
+        _akkaLogger.Log(ConvertLevel(traceInfo.TraceLevel), traceInfo.Exception,
+            "[StartTime: {StartTime}][ExecutionTime: {ExecutionTime}][Sql: {SqlText}]"
+            , traceInfo.StartTime
+            , traceInfo.ExecutionTime
+            , traceInfo.SqlText
+            );
 
     public void OnWrite(string? arg1, string? arg2, TraceLevel traceLevel) =>
         _akkaLogger.Log(ConvertLevel(traceLevel), "[{0}][{1}]", new object[]  { arg1, arg2 } );
