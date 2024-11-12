@@ -10,6 +10,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
+using Akka.Event;
 using Akka.Pattern;
 using Akka.Persistence.Journal;
 using Akka.Persistence.Query;
@@ -36,7 +37,7 @@ namespace Akka.Persistence.Sql.Query
             , Func<(Serializer, object), TJournalPayload> toPayload
             , Func<(Serializer, TJournalPayload, Type), object> fromPayload)
             : base(system, config
-                , (mat, readJournalConfig) =>
+                , (mat, readJournalConfig, queryPermitter) =>
                     new ByteArrayReadJournalDao<TJournalPayload>(
                         scheduler: system.Scheduler.Advanced,
                         materializer: mat,
@@ -48,7 +49,9 @@ namespace Akka.Persistence.Sql.Query
                             separator: readJournalConfig.PluginConfig.TagSeparator,
                             writerUuid: null,
                             toPayload: toPayload,
-                            fromPayload: fromPayload),
+                            fromPayload: fromPayload
+                            ),
+                        queryPermitter: queryPermitter,
                         // TODO: figure out a way to signal shutdown to the query executor here
                         default))
         {
@@ -79,11 +82,13 @@ namespace Akka.Persistence.Sql.Query
         protected readonly TReaderDao ReadJournalDao;
 
 
+        private readonly IActorRef _queryPermitter;
+        private readonly ILoggingAdapter _log;
 
         public SqlReadJournal(
             ExtendedActorSystem system,
             Configuration.Config config,
-            Func<IMaterializer, ReadJournalConfig<TJournalPayload>, TReaderDao> readerFactory
+            Func<IMaterializer, ReadJournalConfig<TJournalPayload>, IActorRef, TReaderDao> readerFactory
         )
         {
             ReadJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
@@ -93,12 +98,9 @@ namespace Akka.Persistence.Sql.Query
             if (singleSetup.HasValue)
                 ReadJournalConfig = singleSetup.Value.Apply(ReadJournalConfig);
 
-            if (ReadJournalConfig.PluginId is not null)
-            {
-                var multiSetup = setup.Get<MultiDataOptionsSetup>();
-                if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(ReadJournalConfig.PluginId, out var dataOptions))
-                    ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions);
-            }
+            var multiSetup = setup.Get<MultiDataOptionsSetup>();
+            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(ReadJournalConfig.PluginId, out var dataOptions))
+                ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions);
 
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(ReadJournalConfig.WritePluginId);
 
@@ -114,7 +116,12 @@ namespace Akka.Persistence.Sql.Query
                 settings: ActorMaterializerSettings.Create(system),
                 namePrefix: $"l2db-query-mat-{Guid.NewGuid():N}");
 
-            ReadJournalDao = readerFactory(_mat, ReadJournalConfig);
+            _log = Logging.GetLogger(system, $"{ReadJournalConfig.PluginId}-{nameof(SqlReadJournal<TJournalPayload>)}");
+            _queryPermitter = system.ActorOf(
+                Props.Create(() => new QueryThrottler(ReadJournalConfig.MaxConcurrentQueries)),
+                $"{ReadJournalConfig.PluginId}-query-permitter");
+
+            ReadJournalDao = readerFactory(_mat, ReadJournalConfig,_queryPermitter);
 
             _journalSequenceActor = system.ActorOf(
                 props: Props.Create(

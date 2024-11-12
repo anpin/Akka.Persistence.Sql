@@ -115,7 +115,7 @@ namespace Akka.Persistence.Sql.Hosting
         ///     </para>
         /// </summary>
         public IsolationLevel? WriteIsolationLevel { get; set; }
-        
+
         /// <summary>
         ///     <para>
         ///         The custom <see cref="DataOptions"/> used for the connection to the database for both event writes and query reads.
@@ -141,6 +141,23 @@ namespace Akka.Persistence.Sql.Hosting
         /// </summary>
         public DataOptions? DataOptions { get; set; }
 
+        /// <summary>
+        ///     <para>
+        ///         Determines how many queries are allowed to run in parallel at any given time
+        ///     </para>
+        ///     <b>Default</b>: 100
+        /// </summary>
+        public int? MaxConcurrentQueries { get; set; }
+
+        /// <summary>
+        ///     <para>
+        ///         How long should a query request stays in queue when it is being throttled before
+        ///         signaling an operation timeout
+        ///     </para>
+        ///     <b>Default</b>: 3 seconds
+        /// </summary>
+        public TimeSpan? QueryThrottleTimeout { get; set; }
+
         protected override Configuration.Config InternalDefaultConfig => Default;
 
         public Configuration.Config DefaultQueryConfig => DefaultQuery.MoveTo(QueryPluginId);
@@ -159,10 +176,10 @@ namespace Akka.Persistence.Sql.Hosting
             }
 
             sb.AppendLine($"plugin-id = {PluginId.ToHocon()}");
-            
+
             if(ConnectionString is not null)
                 sb.AppendLine($"connection-string = {ConnectionString.ToHocon()}");
-            
+
             if(ProviderName is not null)
                 sb.AppendLine($"provider-name = {ProviderName.ToHocon()}");
 
@@ -200,13 +217,13 @@ namespace Akka.Persistence.Sql.Hosting
         {
             sb.Append(queryPluginId).AppendLine("{");
             sb.AppendLine($"plugin-id = {QueryPluginId.ToHocon()}");
-            
+
             if(ConnectionString is not null)
                 sb.AppendLine($"connection-string = {ConnectionString.ToHocon()}");
-            
+
             if(ProviderName is not null)
                 sb.AppendLine($"provider-name = {ProviderName.ToHocon()}");
-            
+
             sb.AppendLine($"write-plugin = {pluginId}");
 
             if (DatabaseOptions is not null)
@@ -223,6 +240,12 @@ namespace Akka.Persistence.Sql.Hosting
 
             if (QueryRefreshInterval is not null)
                 sb.AppendLine($"refresh-interval = {QueryRefreshInterval.ToHocon()}");
+
+            if(MaxConcurrentQueries is not null)
+                sb.AppendLine($"max-concurrent-queries = {MaxConcurrentQueries.ToHocon()}");
+
+            if(QueryThrottleTimeout is not null)
+                sb.AppendLine($"query-throttle-timeout = {QueryThrottleTimeout.Value.ToHocon()}");
 
             sb.AppendLine($"serializer = {Serializer.ToHocon()}");
 
