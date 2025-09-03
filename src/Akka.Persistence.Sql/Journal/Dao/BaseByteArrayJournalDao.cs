@@ -21,6 +21,7 @@ using Akka.Persistence.Sql.Serialization;
 using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
+using Akka.Streams.Supervision;
 using LanguageExt;
 using LinqToDB;
 using LinqToDB.Data;
@@ -66,18 +67,19 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 .BatchWeighted(
                     JournalConfig.DaoConfig.BatchSize,
                     cf => cf.Rows.Count,
-                    r => new WriteQueueSet<TJournalPayload>(ImmutableList.Create(new[] { r.Tcs }), r.Rows),
+                    r => new WriteQueueSet<TJournalPayload>(ImmutableList.Create(new[] { r.Tcs }), r.Rows, ImmutableList.Create([r.CancellationToken])),
                     (oldRows, newRows) =>
                         new WriteQueueSet<TJournalPayload>(
                             oldRows.Tcs.Add(newRows.Tcs),
-                            oldRows.Rows.Concat(newRows.Rows)))
+                            oldRows.Rows.Concat(newRows.Rows),
+                            oldRows.CancellationTokens.Add(newRows.CancellationToken)))
                 .SelectAsync(
                     JournalConfig.DaoConfig.Parallelism,
                     async promisesAndRows =>
                     {
                         try
                         {
-                            await WriteJournalRows(promisesAndRows.Rows);
+                            await WriteJournalRows(promisesAndRows.Rows, promisesAndRows.CancellationTokens);
                             foreach (var taskCompletionSource in promisesAndRows.Tcs)
                                 taskCompletionSource.TrySetResult(NotUsed.Instance);
                         }
@@ -89,6 +91,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
                         return NotUsed.Instance;
                     })
+                .AddAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.RestartingDecider))
                 .ToMaterialized(
                     Sink.Ignore<NotUsed>(),
                     Keep.Left).Run(Materializer);
@@ -96,6 +99,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
 
         public async Task<IImmutableList<Exception>> AsyncWriteMessages(
             IEnumerable<AtomicWrite> messages,
+            CancellationToken cancellationToken,
             long timeStamp = 0)
         {
             var serializedTries = Serializer.Serialize(messages, timeStamp);
@@ -104,31 +108,47 @@ namespace Akka.Persistence.Sql.Journal.Dao
             var rows = Seq(FlattenListOfListsToList(serializedTries));
 
             // Wait for the write to go through. If Task fails, write will be captured as WriteMessagesFailure.
-            await QueueWriteJournalRows(rows);
+            await QueueWriteJournalRows(rows, cancellationToken);
 
             // If we get here, we build an ImmutableList containing our rejections.
             // These will be captured as WriteMessagesRejected
             return BuildWriteRejections(serializedTries);
         }
 
-        public async Task Delete(string persistenceId, long maxSequenceNr)
+        public async Task Delete(string persistenceId, long maxSequenceNr, CancellationToken cancellationToken)
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, ShutdownToken);
+            long maxMarkedDeletion;
+
+            // no need to use transaction
+            await using (var connection = ConnectionFactory.GetConnection())
+            {
+                maxMarkedDeletion = await MaxMarkedForDeletionMaxPersistenceIdQuery(connection, persistenceId, maxSequenceNr).FirstOrDefaultAsync(cts.Token);
+            }
+
+            if (maxMarkedDeletion is 0)
+                return;
+
             await ConnectionFactory.ExecuteWithTransactionAsync(
                 WriteIsolationLevel,
-                ShutdownToken,
+                cts.Token,
                 async (connection, token) =>
                 {
-                    await connection
-                        .GetTable<JournalRow<TJournalPayload>>()
+                    var journalTable = connection.GetTable<JournalRow<TJournalPayload>>();
+                    await journalTable
                         .Where(
                             r =>
                                 r.PersistenceId == persistenceId &&
-                                r.SequenceNumber <= maxSequenceNr)
+                                r.SequenceNumber == maxMarkedDeletion)
                         .Set(r => r.Deleted, true)
                         .UpdateAsync(token);
 
-                    var maxMarkedDeletion =
-                        await MaxMarkedForDeletionMaxPersistenceIdQuery(connection, persistenceId).FirstOrDefaultAsync(token);
+                    await journalTable
+                        .Where(
+                            r =>
+                                r.PersistenceId == persistenceId &&
+                                r.SequenceNumber < maxMarkedDeletion)
+                        .DeleteAsync(token);
 
                     if (JournalConfig.DaoConfig.SqlCommonCompatibilityMode)
                     {
@@ -147,19 +167,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                                     SequenceNumber = maxMarkedDeletion,
                                 },
                                 token: token);
-                    }
 
-                    await connection
-                        .GetTable<JournalRow<TJournalPayload>>()
-                        .Where(
-                            r =>
-                                r.PersistenceId == persistenceId &&
-                                r.SequenceNumber <= maxSequenceNr &&
-                                r.SequenceNumber < maxMarkedDeletion)
-                        .DeleteAsync(token);
-
-                    if (JournalConfig.DaoConfig.SqlCommonCompatibilityMode)
-                    {
                         await connection
                             .GetTable<JournalMetaData>()
                             .Where(
@@ -175,7 +183,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
                             .GetTable<JournalTagRow>()
                             .Where(
                                 r =>
-                                    r.SequenceNumber <= maxSequenceNr &&
+                                    r.SequenceNumber < maxMarkedDeletion &&
                                     r.PersistenceId == persistenceId)
                             .DeleteAsync(token);
                     }
@@ -212,11 +220,12 @@ namespace Akka.Persistence.Sql.Journal.Dao
             return Done.Instance;
         }
 
-        public async Task<long> HighestSequenceNr(string persistenceId, long fromSequenceNr)
+        public async Task<long> HighestSequenceNr(string persistenceId, long fromSequenceNr, CancellationToken cancellationToken)
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, ShutdownToken);
             return await ConnectionFactory.ExecuteWithTransactionAsync(
                 ReadIsolationLevel,
-                ShutdownToken,
+                cts.Token,
                 async (connection, token) => (await connection.MaxSeqNumberForPersistenceIdQuery(JournalConfig.DaoConfig.SqlCommonCompatibilityMode,persistenceId, fromSequenceNr).MaxAsync(token))
                     .GetValueOrDefault(0));
         }
@@ -262,13 +271,13 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 });
         }
 
-        private async Task QueueWriteJournalRows(Seq<JournalRow<TJournalPayload>> xs)
+        private async Task QueueWriteJournalRows(Seq<JournalRow<TJournalPayload>> xs, CancellationToken cancellationToken)
         {
             var promise = new TaskCompletionSource<NotUsed>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Send promise and rows into queue. If the Queue takes it,
             // It will write the Promise state when finished writing (or failing)
-            var result = await WriteQueue.OfferAsync(new WriteQueueEntry<TJournalPayload>(promise, xs));
+            var result = await WriteQueue.OfferAsync(new WriteQueueEntry<TJournalPayload>(promise, xs, cancellationToken));
 
             switch (result)
             {
@@ -295,7 +304,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
             await promise.Task;
         }
 
-        private async Task WriteJournalRows(Seq<JournalRow<TJournalPayload>> xs)
+        private async Task WriteJournalRows(Seq<JournalRow<TJournalPayload>> xs, ImmutableList<CancellationToken> cancellationTokens)
         {
             switch (xs.Count)
             {
@@ -307,24 +316,26 @@ namespace Akka.Persistence.Sql.Journal.Dao
                 // Isn't worth it due to insert caching/etc.
                 case 1 when _tagWriteMode == TagMode.Csv || xs.Head().TagArray.Length == 0:
                 {
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ShutdownToken, cancellationTokens[0]);
                     await ConnectionFactory.ExecuteWithTransactionAsync(
                         WriteIsolationLevel,
-                        ShutdownToken,
+                        cts.Token,
                         async (connection, token) => await connection.InsertAsync(xs.Head, token));
                     break;
                 }
 
                 default:
-                    await InsertMultiple(xs);
+                    await InsertMultiple(xs, cancellationTokens);
                     break;
             }
         }
 
-        private async Task InsertMultiple(Seq<JournalRow<TJournalPayload>> xs)
+        private async Task InsertMultiple(Seq<JournalRow<TJournalPayload>> xs, ImmutableList<CancellationToken> cancellationTokens)
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationTokens.Add(ShutdownToken).ToArray());
             await ConnectionFactory.ExecuteWithTransactionAsync(
                 WriteIsolationLevel,
-                ShutdownToken,
+                cts.Token,
                 async (connection, token) =>
                 {
                     if (_tagWriteMode == TagMode.Csv)
@@ -437,10 +448,11 @@ namespace Akka.Persistence.Sql.Journal.Dao
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static IQueryable<long> MaxMarkedForDeletionMaxPersistenceIdQuery(
             AkkaDataConnection<TJournalPayload> connection,
-            string persistenceId)
+            string persistenceId,
+            long maxSequenceNr)
             => connection
                 .GetTable<JournalRow<TJournalPayload>>()
-                .Where(r => r.PersistenceId == persistenceId && r.Deleted)
+                .Where(r => r.PersistenceId == persistenceId && r.SequenceNumber <= maxSequenceNr)
                 .OrderByDescending(r => r.SequenceNumber)
                 .Select(r => r.SequenceNumber)
                 .Take(1);

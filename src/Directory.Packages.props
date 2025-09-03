@@ -1,11 +1,12 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <AkkaVersion>1.5.30</AkkaVersion>
-    <AkkaHostingVersion>1.5.29</AkkaHostingVersion>
+    <AkkaVersion>1.5.44</AkkaVersion>
+    <AkkaHostingVersion>1.5.44</AkkaHostingVersion>
     <FluentMigratorVersion>5.2.0</FluentMigratorVersion>
     <SqliteVersion>1.0.118</SqliteVersion>
     <MicrosoftSqliteVersion>8.0.7</MicrosoftSqliteVersion>
+    <MicrosoftExtensionsVersion>[6.0.0, )</MicrosoftExtensionsVersion>
   </PropertyGroup>
   <!-- Akka dependencies -->
   <ItemGroup>
@@ -43,7 +44,7 @@
   </ItemGroup>
   <!-- Sqlite dependencies -->
   <ItemGroup>
-    <PackageVersion Include="Akka.Persistence.Sqlite" Version="$(AkkaVersion)" />
+    <PackageVersion Include="Akka.Persistence.Sqlite" Version="1.5.39" />
     <PackageVersion Include="System.Data.SQLite" Version="$(SqliteVersion)" />
     <PackageVersion Include="System.Data.SQLite.Core" Version="$(SqliteVersion)" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="$(MicrosoftSqliteVersion)" />
@@ -72,9 +73,10 @@
     <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
     <PackageVersion Include="FluentAssertions" Version="6.12.1" />
     <PackageVersion Include="JetBrains.dotMemoryUnit" Version="3.2.20220510" />
-    <PackageVersion Include="xunit" Version="2.8.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftExtensionsVersion)" />
   </ItemGroup>
   <!-- SourceLink support for all Akka.NET projects -->
   <ItemGroup>

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -49,7 +50,7 @@ public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedSt
         {
             var multiSetup = setup.Get<MultiDataOptionsSetup>();
             if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_settings.PluginId, out var dataOptions))
-                _settings = _settings.WithDataOptions(dataOptions);
+                _settings = _settings.WithDataOptions(dataOptions!);
         }
 
         _dao = new ByteArraySnapshotDao<TJournalPayload>(
@@ -70,6 +71,12 @@ public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedSt
         base.PreStart();
         Initialize().PipeTo(Self);
         BecomeStacked(WaitingForInitialization);
+    }
+
+    protected override void PostStop()
+    {
+        _dao.Dispose();
+        base.PostStop();
     }
 
     private bool WaitingForInitialization(object message)
@@ -109,57 +116,61 @@ public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedSt
         return Status.Success.Instance;
     }
 
-    protected override async Task<SelectedSnapshot> LoadAsync(
+    protected override async Task<SelectedSnapshot?> LoadAsync(
         string persistenceId,
-        SnapshotSelectionCriteria criteria)
+        SnapshotSelectionCriteria criteria,
+        CancellationToken cancellationToken)
         => criteria.MaxSequenceNr switch
         {
             long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue
-                => (await _dao.LatestSnapshotAsync(persistenceId)).GetOrElse(null),
+                => (await _dao.LatestSnapshotAsync(persistenceId, cancellationToken)).GetOrNull(),
 
             long.MaxValue
-                => (await _dao.SnapshotForMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp)).GetOrElse(null),
+                => (await _dao.SnapshotForMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken)).GetOrNull(),
 
             _ => criteria.MaxTimeStamp == DateTime.MaxValue
                 ? (await _dao.SnapshotForMaxSequenceNrAsync(
                     persistenceId: persistenceId,
-                    sequenceNr: criteria.MaxSequenceNr)).GetOrElse(null)
+                    sequenceNr: criteria.MaxSequenceNr,
+                    cancellationToken)).GetOrNull()
                 : (await _dao.SnapshotForMaxSequenceNrAndMaxTimestampAsync(
                     persistenceId: persistenceId,
                     sequenceNr: criteria.MaxSequenceNr,
-                    timestamp: criteria.MaxTimeStamp)).GetOrElse(null),
+                    timestamp: criteria.MaxTimeStamp,
+                    cancellationToken)).GetOrNull(),
         };
 
-    protected override async Task SaveAsync(SnapshotMetadata metadata, object snapshot)
-        => await _dao.SaveAsync(metadata, snapshot);
+    protected override async Task SaveAsync(SnapshotMetadata metadata, object snapshot, CancellationToken cancellationToken)
+        => await _dao.SaveAsync(metadata, snapshot, cancellationToken);
 
-    protected override async Task DeleteAsync(SnapshotMetadata metadata)
-        => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr, metadata.Timestamp);
+    protected override async Task DeleteAsync(SnapshotMetadata metadata, CancellationToken cancellationToken)
+        => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr, metadata.Timestamp, cancellationToken);
 
-    protected override async Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria)
+    protected override async Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria, CancellationToken cancellationToken)
     {
         switch (criteria.MaxSequenceNr)
         {
             case long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue:
-                await _dao.DeleteAllSnapshotsAsync(persistenceId);
+                await _dao.DeleteAllSnapshotsAsync(persistenceId, cancellationToken);
                 break;
 
             case long.MaxValue:
-                await _dao.DeleteUpToMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp);
+                await _dao.DeleteUpToMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken);
                 break;
 
             default:
             {
                 if (criteria.MaxTimeStamp == DateTime.MaxValue)
                 {
-                    await _dao.DeleteUpToMaxSequenceNrAsync(persistenceId, criteria.MaxSequenceNr);
+                    await _dao.DeleteUpToMaxSequenceNrAsync(persistenceId, criteria.MaxSequenceNr, cancellationToken);
                 }
                 else
                 {
                     await _dao.DeleteUpToMaxSequenceNrAndMaxTimestampAsync(
                         persistenceId: persistenceId,
                         maxSequenceNr: criteria.MaxSequenceNr,
-                        maxTimestamp: criteria.MaxTimeStamp);
+                        maxTimestamp: criteria.MaxTimeStamp,
+                        cancellationToken);
                 }
 
                 break;

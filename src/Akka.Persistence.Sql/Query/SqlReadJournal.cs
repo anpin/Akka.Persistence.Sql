@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
@@ -53,7 +54,7 @@ namespace Akka.Persistence.Sql.Query
                             ),
                         queryPermitter: queryPermitter,
                         // TODO: figure out a way to signal shutdown to the query executor here
-                        default))
+                        CancellationToken.None))
         {
         }
     }
@@ -100,10 +101,9 @@ namespace Akka.Persistence.Sql.Query
 
             var multiSetup = setup.Get<MultiDataOptionsSetup>();
             if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(ReadJournalConfig.PluginId, out var dataOptions))
-                ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions);
+                ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions!);
 
             _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(ReadJournalConfig.WritePluginId);
-
             // Fix for https://github.com/akkadotnet/Akka.Persistence.Sql/issues/344
             var writeJournal = Persistence.Instance.Apply(system).JournalFor(ReadJournalConfig.WritePluginId);
             // we want to block, we want to crash if the journal is not available
@@ -123,7 +123,7 @@ namespace Akka.Persistence.Sql.Query
 
             ReadJournalDao = readerFactory(_mat, ReadJournalConfig,_queryPermitter);
 
-            _journalSequenceActor = system.ActorOf(
+            _journalSequenceActor = system.SystemActorOf(
                 props: Props.Create(
                     () => new JournalSequenceActor(
                         ReadJournalDao,
@@ -248,15 +248,15 @@ namespace Akka.Persistence.Sql.Query
                             timestamp: r.representation.Timestamp,
                             tags: r.tags));
 
-        private Source<EventEnvelope, NotUsed> CurrentJournalEvents(long offset, long max, MaxOrderingId latestOrdering)
+        private Source<EventEnvelope[], NotUsed> CurrentJournalEvents(long offset, long max, MaxOrderingId latestOrdering)
         {
             if (latestOrdering.Max < offset)
-                return Source.Empty<EventEnvelope>();
+                return Source.Empty<EventEnvelope[]>();
 
             return ReadJournalDao
                 .Events(offset, latestOrdering.Max, max)
                 .SelectAsync(1, r => Task.FromResult(r.Get()))
-                .SelectMany(
+                .Select(
                     a =>
                     {
                         var (representation, tags, ordering) = a;
@@ -269,7 +269,8 @@ namespace Akka.Persistence.Sql.Query
                                         sequenceNr: r.SequenceNr,
                                         @event: r.Payload,
                                         timestamp: r.Timestamp,
-                                        tags: tags));
+                                        tags: tags))
+                            .ToArray();
                     });
         }
 
@@ -388,9 +389,10 @@ namespace Akka.Persistence.Sql.Query
                             var queryUntil = await QueryUntil();
 
                             var xs = await CurrentJournalEvents(uf.offset, batchSize, queryUntil)
-                                .RunWith(Sink.Seq<EventEnvelope>(), _mat);
+                                .RunWith(Sink.Seq<EventEnvelope[]>(), _mat);
 
                             var hasMoreEvents = xs.Count == batchSize;
+                            var envelopes = xs.SelectMany(x => x).ToImmutableList();
 
                             var nextControl = FlowControlEnum.Unknown;
                             if (terminateAfterOffset.HasValue)
@@ -398,7 +400,7 @@ namespace Akka.Persistence.Sql.Query
                                 if (!hasMoreEvents && terminateAfterOffset.Value <= queryUntil.Max)
                                     nextControl = FlowControlEnum.Stop;
 
-                                if (xs.Exists(r => r.Offset is Sequence s && s.Value >= terminateAfterOffset.Value))
+                                if (envelopes.Exists(r => r.Offset is Sequence s && s.Value >= terminateAfterOffset.Value))
                                     nextControl = FlowControlEnum.Stop;
                             }
 
@@ -411,12 +413,11 @@ namespace Akka.Persistence.Sql.Query
 
                             var nextStartingOffset = xs.Count == 0
                                 ? Math.Max(uf.offset, queryUntil.Max)
-                                : xs.Select(r => r.Offset as Sequence)
+                                : envelopes.Select(r => r.Offset as Sequence)
                                     .Max(t => t?.Value ?? long.MinValue);
 
-                            return Option<((long nextStartingOffset, FlowControlEnum nextControl),
-                                IImmutableList<EventEnvelope>xs)>.Create(
-                                ((nextStartingOffset, nextControl), xs));
+                            return Option<((long nextStartingOffset, FlowControlEnum nextControl), IImmutableList<EventEnvelope>xs)>.Create(
+                                ((nextStartingOffset, nextControl), envelopes));
                         }
 
                         return uf.flowControl switch

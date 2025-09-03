@@ -52,14 +52,9 @@ namespace Akka.Persistence.Sql.Extensions
             DbStateHolder<TJournalPayload> state,
             Func<AkkaDataConnection<TJournalPayload>, CancellationToken, Task<T>> handler)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(state.ShutdownToken);
-            {
-                cts.CancelAfter(state.QueryThrottleTimeout);
-                await state.QueryPermitter.Ask<QueryStartGranted>(RequestQueryStart.Instance, cts.Token);
-            }
-
             try
             {
+                await state.QueryPermitter.Ask<QueryStartGranted>(new RequestQueryStart(state.QueryThrottleTimeout), state.QueryThrottleTimeout);
                 return await factory.ExecuteWithTransactionAsync(state.IsolationLevel, state.ShutdownToken, handler);
             }
             finally
@@ -102,14 +97,9 @@ namespace Akka.Persistence.Sql.Extensions
             TState state,
             Func<AkkaDataConnection<TJournalPayload>, CancellationToken, TState, Task<T>> handler)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(factory.ShutdownToken);
-            {
-                cts.CancelAfter(factory.QueryThrottleTimeout);
-                await factory.QueryPermitter.Ask<QueryStartGranted>(RequestQueryStart.Instance, cts.Token);
-            }
-
             try
             {
+                await factory.QueryPermitter.Ask<QueryStartGranted>(new RequestQueryStart(factory.QueryThrottleTimeout), factory.QueryThrottleTimeout);
                 return await factory.ConnectionFactory.ExecuteWithTransactionAsync(state, factory.IsolationLevel, factory.ShutdownToken, handler);
             }
             finally

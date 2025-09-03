@@ -39,7 +39,7 @@ public class DateTimeHelpers
         => UnixEpoch.AddMilliseconds(unixEpochMillis);
 }
 
-public class SqlWriteJournal(Configuration.Config journalConfig) : SqlWriteJournal<byte[]>(journalConfig
+public sealed class SqlWriteJournal(Configuration.Config journalConfig) : SqlWriteJournal<byte[]>(journalConfig
     , (s) => s.Item1.ToBinary(s.Item2)
     , (s) => s.Item1.FromBinary(s.Item2, s.Item3));
 
@@ -82,7 +82,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         {
             var multiSetup = setup.Get<MultiDataOptionsSetup>();
             if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_journalConfig.PluginId, out var dataOptions))
-                _journalConfig = _journalConfig.WithDataOptions(dataOptions);
+                _journalConfig = _journalConfig.WithDataOptions(dataOptions!);
         }
 
         _useWriterUuid = _journalConfig.TableConfig.EventJournalTable.UseWriterUuidColumn;
@@ -219,7 +219,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
                     : Task.FromException<ReplayCompletion>(t.Failure.Value))
             .RunForeach(r => recoveryCallback(r.Representation), _mat);
 
-    public override async Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr)
+    public override async Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr, CancellationToken cancellationToken)
     {
         if (_writeInProgress.TryGetValue(persistenceId, out var wip))
         {
@@ -228,10 +228,10 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
             await new NoThrowAwaiter(wip);
         }
 
-        return await _journal!.HighestSequenceNr(persistenceId, fromSequenceNr);
+        return await _journal!.HighestSequenceNr(persistenceId, fromSequenceNr, cancellationToken);
     }
 
-    protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
+    protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
     {
         // TODO: CurrentTimeMillis;
         var currentTime = DateTime.UtcNow.Ticks;
@@ -239,7 +239,7 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         var messagesList = messages.ToList();
         var persistenceId = messagesList.Head().PersistenceId;
 
-        var future = _journal!.AsyncWriteMessages(messagesList, currentTime);
+        var future = _journal!.AsyncWriteMessages(messagesList, cancellationToken, currentTime);
 
         _writeInProgress[persistenceId] = future;
         var self = Self;
@@ -256,6 +256,6 @@ public class SqlWriteJournal<TJournalPayload> : AsyncWriteJournal, IWithUnbounde
         return future;
     }
 
-    protected override async Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
-        => await _journal!.Delete(persistenceId, toSequenceNr);
+    protected override async Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr, CancellationToken cancellationToken)
+        => await _journal!.Delete(persistenceId, toSequenceNr, cancellationToken);
 }
