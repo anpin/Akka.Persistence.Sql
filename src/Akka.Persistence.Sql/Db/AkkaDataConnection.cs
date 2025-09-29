@@ -47,6 +47,8 @@ namespace Akka.Persistence.Sql.Db
         public DatabaseSchema GetSchema()
             => _connection.DataProvider.GetSchemaProvider().GetSchema(_connection);
 
+        public DataConnection Connection => _connection;
+        
         public ITable<T> CreateTable<T>() where T : notnull
             => _connection.CreateTable<T>();
 
