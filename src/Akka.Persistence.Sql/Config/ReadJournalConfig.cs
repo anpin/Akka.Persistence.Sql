@@ -11,7 +11,7 @@ using LinqToDB;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class ReadJournalConfig : IProviderConfig<JournalTableConfig>
+    public class ReadJournalConfig<TJournalPayload> : IProviderConfig<JournalTableConfig<TJournalPayload>>
     {
         public ReadJournalConfig(Configuration.Config config)
         {
@@ -19,7 +19,7 @@ namespace Akka.Persistence.Sql.Config
             ConnectionString = config.GetString("connection-string");
             ProviderName = config.GetString("provider-name");
             WritePluginId = config.GetString("write-plugin");
-            TableConfig = new JournalTableConfig(config);
+            TableConfig = new JournalTableConfig<TJournalPayload>(config);
             DaoConfig = new BaseByteArrayJournalDaoConfig(config);
             UseCloneConnection = config.GetBoolean("use-clone-connection");
             JournalSequenceRetrievalConfiguration = new JournalSequenceRetrievalConfig(config);
@@ -42,7 +42,7 @@ namespace Akka.Persistence.Sql.Config
             string connectionString,
             string providerName,
             string writePluginId,
-            JournalTableConfig tableConfig,
+            JournalTableConfig<TJournalPayload> tableConfig,
             BaseByteArrayJournalDaoConfig daoConfig,
             int maxBufferSize,
             bool addShutdownHook,
@@ -57,7 +57,7 @@ namespace Akka.Persistence.Sql.Config
             int maxConcurrentQueries,
             TimeSpan queryThrottleTimeout)
         {
-            PluginId = pluginId ?? SqlPersistence.QueryConfigPath;
+            PluginId = pluginId ?? SqlPersistence<TJournalPayload>.QueryConfigPath;
             ConnectionString = connectionString;
             ProviderName = providerName;
             WritePluginId = writePluginId;
@@ -76,11 +76,11 @@ namespace Akka.Persistence.Sql.Config
             MaxConcurrentQueries = maxConcurrentQueries;
             QueryThrottleTimeout = queryThrottleTimeout;
         }
-        
+
         public string PluginId { get; }
 
         public string WritePluginId { get; }
-        
+
         public BaseByteArrayJournalDaoConfig DaoConfig { get; }
 
         public int MaxBufferSize { get; }
@@ -97,7 +97,7 @@ namespace Akka.Persistence.Sql.Config
 
         public string ConnectionString { get; }
 
-        public JournalTableConfig TableConfig { get; }
+        public JournalTableConfig<TJournalPayload> TableConfig { get; }
 
         public IDaoConfig IDaoConfig => DaoConfig;
 
@@ -110,23 +110,23 @@ namespace Akka.Persistence.Sql.Config
         public IsolationLevel ReadIsolationLevel { get; }
 
         public DataOptions? DataOptions { get; }
-        
+
         public int MaxConcurrentQueries { get; }
-        
+
         public TimeSpan QueryThrottleTimeout { get; }
 
-        public ReadJournalConfig WithDataOptions(DataOptions dataOptions)
+        public ReadJournalConfig<TJournalPayload> WithDataOptions(DataOptions dataOptions)
             => Copy(dataOptions: dataOptions);
 
-        public ReadJournalConfig WithPluginId(string pluginId)
+        public ReadJournalConfig<TJournalPayload> WithPluginId(string pluginId)
             => Copy(pluginId: pluginId);
 
-        private ReadJournalConfig Copy(
+        private ReadJournalConfig<TJournalPayload> Copy(
             string? pluginId = null,
             string? connectionString = null,
             string? providerName = null,
             string? writePluginId = null,
-            JournalTableConfig? tableConfig = null,
+            JournalTableConfig<TJournalPayload>? tableConfig = null,
             BaseByteArrayJournalDaoConfig? daoConfig = null,
             int? maxBufferSize = null,
             bool? addShutdownHook = null,

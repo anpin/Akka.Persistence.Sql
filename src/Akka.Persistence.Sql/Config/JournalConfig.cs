@@ -10,7 +10,7 @@ using LinqToDB;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class JournalConfig : IProviderConfig<JournalTableConfig>
+    public class JournalConfig<TJournalPayload> : IProviderConfig<JournalTableConfig<TJournalPayload>>
     {
         public JournalConfig(Configuration.Config config)
         {
@@ -18,7 +18,7 @@ namespace Akka.Persistence.Sql.Config
             MaterializerDispatcher = config.GetString("materializer-dispatcher", "akka.actor.default-dispatcher");
             ConnectionString = config.GetString("connection-string");
             ProviderName = config.GetString("provider-name");
-            TableConfig = new JournalTableConfig(config);
+            TableConfig = new JournalTableConfig<TJournalPayload>(config);
             PluginConfig = new JournalPluginConfig(config);
             DaoConfig = new BaseByteArrayJournalDaoConfig(config);
 
@@ -42,7 +42,7 @@ namespace Akka.Persistence.Sql.Config
             string materializerDispatcher,
             string connectionString,
             string providerName,
-            JournalTableConfig tableConfig,
+            JournalTableConfig<TJournalPayload> tableConfig,
             IPluginConfig pluginConfig,
             BaseByteArrayJournalDaoConfig daoConfig,
             string? useSharedDb,
@@ -69,7 +69,7 @@ namespace Akka.Persistence.Sql.Config
             ReadIsolationLevel = readIsolationLevel;
             DataOptions = dataOptions;
         }
-        
+
         public string? PluginId { get; }
 
         public string MaterializerDispatcher { get; }
@@ -89,7 +89,7 @@ namespace Akka.Persistence.Sql.Config
 
         public IDaoConfig IDaoConfig => DaoConfig;
 
-        public JournalTableConfig TableConfig { get; }
+        public JournalTableConfig<TJournalPayload> TableConfig { get; }
 
         public string DefaultSerializer { get; }
 
@@ -105,14 +105,14 @@ namespace Akka.Persistence.Sql.Config
 
         public DataOptions? DataOptions { get; }
 
-        public JournalConfig WithDataOptions(DataOptions dataOptions)
+        public JournalConfig<TJournalPayload> WithDataOptions(DataOptions dataOptions)
             => Copy(dataOptions: dataOptions);
 
-        private JournalConfig Copy(
+        private JournalConfig<TJournalPayload> Copy(
             string? materializerDispatcher = null,
             string? connectionString = null,
             string? providerName = null,
-            JournalTableConfig? tableConfig = null,
+            JournalTableConfig<TJournalPayload>? tableConfig = null,
             IPluginConfig? pluginConfig = null,
             BaseByteArrayJournalDaoConfig? daoConfig = null,
             string? useSharedDb = null,

@@ -19,11 +19,11 @@ namespace Akka.Persistence.Sql.Config
         public int Parallelism { get; } = 0;
     }
 
-    public class SnapshotConfig : IProviderConfig<SnapshotTableConfiguration>
+    public class SnapshotConfig<TJournalPayload> : IProviderConfig<SnapshotTableConfiguration<TJournalPayload>>
     {
         public SnapshotConfig(Configuration.Config config)
         {
-            TableConfig = new SnapshotTableConfiguration(config);
+            TableConfig = new SnapshotTableConfiguration<TJournalPayload>(config);
             PluginConfig = new SnapshotPluginConfig(config);
 
             var dbConf = config.GetString(ConfigKeys.useSharedDb);
@@ -45,7 +45,7 @@ namespace Akka.Persistence.Sql.Config
         }
 
         private SnapshotConfig(
-            SnapshotTableConfiguration tableConfig,
+            SnapshotTableConfiguration<TJournalPayload> tableConfig,
             IPluginConfig pluginConfig,
             string? useSharedDb,
             string defaultSerializer,
@@ -73,7 +73,7 @@ namespace Akka.Persistence.Sql.Config
             ReadIsolationLevel = readIsolationLevel;
             DataOptions = dataOptions;
         }
-        
+
         public string? PluginId { get; }
 
         public string? UseSharedDb { get; }
@@ -91,7 +91,7 @@ namespace Akka.Persistence.Sql.Config
 
         public string ConnectionString { get; }
 
-        public SnapshotTableConfiguration TableConfig { get; }
+        public SnapshotTableConfiguration<TJournalPayload> TableConfig { get; }
 
         public IDaoConfig IDaoConfig { get; }
 
@@ -105,11 +105,11 @@ namespace Akka.Persistence.Sql.Config
 
         public IsolationLevel ReadIsolationLevel { get; }
 
-        public SnapshotConfig WithDataOptions(DataOptions dataOptions)
+        public SnapshotConfig<TJournalPayload> WithDataOptions(DataOptions dataOptions)
             => Copy(dataOptions: dataOptions);
 
-        private SnapshotConfig Copy(
-            SnapshotTableConfiguration? tableConfig = null,
+        private SnapshotConfig<TJournalPayload> Copy(
+            SnapshotTableConfiguration<TJournalPayload>? tableConfig = null,
             IPluginConfig? pluginConfig = null,
             string? useSharedDb = null,
             string? defaultSerializer = null,

@@ -9,7 +9,7 @@ using Akka.Configuration;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public class SnapshotTableConfiguration: IEquatable<SnapshotTableConfiguration>
+    public class SnapshotTableConfiguration<TJournalPayload>: IEquatable<SnapshotTableConfiguration<TJournalPayload>>
     {
         public SnapshotTableConfiguration(Configuration.Config config)
         {
@@ -22,7 +22,7 @@ namespace Akka.Persistence.Sql.Config
                 $"The configuration path akka.persistence.journal.sql.{mappingPath} does not exist");
 
             if (mappingPath != "default")
-                mappingConfig.WithFallback(SqlPersistence.DefaultSnapshotMappingConfiguration);
+                mappingConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultSnapshotMappingConfiguration);
 
             SchemaName = mappingConfig.GetString("schema-name");
 
@@ -33,7 +33,7 @@ namespace Akka.Persistence.Sql.Config
 
         public string? SchemaName { get; }
 
-        public bool Equals(SnapshotTableConfiguration? other)
+        public bool Equals(SnapshotTableConfiguration<TJournalPayload>? other)
         {
             if (other is null)
                 return false;
@@ -52,7 +52,7 @@ namespace Akka.Persistence.Sql.Config
             if (ReferenceEquals(this, obj))
                 return true;
 
-            return obj is SnapshotTableConfiguration other && Equals(other);
+            return obj is SnapshotTableConfiguration<TJournalPayload> other && Equals(other);
         }
 
         public override int GetHashCode()

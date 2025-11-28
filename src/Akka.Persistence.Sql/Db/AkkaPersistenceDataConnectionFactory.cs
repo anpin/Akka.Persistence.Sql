@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Diagnostics;
+using Akka.Event;
 using Akka.Persistence.Sql.Config;
 using Akka.Persistence.Sql.Journal.Types;
 using Akka.Persistence.Sql.Snapshot;
@@ -15,18 +17,18 @@ using LinqToDB.Mapping;
 
 namespace Akka.Persistence.Sql.Db
 {
-    public class AkkaPersistenceDataConnectionFactory
+    public class AkkaPersistenceDataConnectionFactory<TJournalPayload>
     {
-        private readonly Lazy<AkkaDataConnection> _cloneConnection;
+        private readonly Lazy<AkkaDataConnection<TJournalPayload>> _cloneConnection;
         private readonly DataOptions _opts;
         private readonly bool _useCloneDataConnection;
 
-        public AkkaPersistenceDataConnectionFactory(IProviderConfig<JournalTableConfig> config)
+        public AkkaPersistenceDataConnectionFactory(IProviderConfig<JournalTableConfig<TJournalPayload>> config)
         {
             // Build Mapping Schema to be used for all connections.
             // Make a unique mapping schema name here to avoid problems
             // with multiple configurations using different schemas.
-            var configName = "akka.persistence.sql." + ( config.DataOptions is not null 
+            var configName = "akka.persistence.sql." + ( config.DataOptions is not null
                 ? HashCode.Combine(config.DataOptions.GetHashCode(), config.TableConfig.GetHashCode())
                 : HashCode.Combine(config.ConnectionString, config.ProviderName, config.TableConfig.GetHashCode()) );
 
@@ -44,19 +46,19 @@ namespace Akka.Persistence.Sql.Db
 
             if (_opts.RetryPolicyOptions.RetryPolicy is null && _opts.RetryPolicyOptions.Factory is null && _opts.ConnectionOptions.ProviderName!.ToLowerInvariant().StartsWith("sqlserver"))
                 _opts = _opts.WithOptions( _opts.RetryPolicyOptions with { RetryPolicy = new SqlServerRetryPolicy() } );
-            
-            _cloneConnection = new Lazy<AkkaDataConnection>(
-                () => new AkkaDataConnection(
+
+            _cloneConnection = new Lazy<AkkaDataConnection<TJournalPayload>>(
+                () => new AkkaDataConnection<TJournalPayload>(
                     config.ProviderName,
                     new DataConnection(_opts)));
         }
 
-        public AkkaPersistenceDataConnectionFactory(IProviderConfig<SnapshotTableConfiguration> config)
+        public AkkaPersistenceDataConnectionFactory(IProviderConfig<SnapshotTableConfiguration<TJournalPayload>> config)
         {
             // Build Mapping Schema to be used for all connections.
             // Make a unique mapping schema name here to avoid problems
             // with multiple configurations using different schemas.
-            var configName = "akka.persistence.sql." + ( config.DataOptions is not null 
+            var configName = "akka.persistence.sql." + ( config.DataOptions is not null
                 ? HashCode.Combine(config.DataOptions.GetHashCode(), config.TableConfig.GetHashCode())
                 : HashCode.Combine(config.ConnectionString, config.ProviderName, config.TableConfig.GetHashCode()) );
 
@@ -81,21 +83,30 @@ namespace Akka.Persistence.Sql.Db
             if (_opts.RetryPolicyOptions.RetryPolicy is null && _opts.ConnectionOptions.ProviderName!.ToLowerInvariant().StartsWith("sqlserver"))
                 _opts = _opts.WithOptions( _opts.RetryPolicyOptions with { RetryPolicy = new AkkaSqlServerRetryPolicy() } );
 
-            _cloneConnection = new Lazy<AkkaDataConnection>(
-                () => new AkkaDataConnection(
+            _cloneConnection = new Lazy<AkkaDataConnection<TJournalPayload>>(
+                () => new AkkaDataConnection<TJournalPayload>(
                     config.ProviderName,
                     new DataConnection(_opts)));
         }
 
+        private static Lazy<DataType> MessageType = new(
+            () =>
+                typeof(TJournalPayload) switch
+                {
+                    { } t when t == typeof(string) => DataType.BinaryJson,
+                    { } t when t == typeof(byte[]) => DataType.Blob,
+                    _ => throw new ArgumentOutOfRangeException(nameof(TJournalPayload), typeof(TJournalPayload), "This type of payload is not supported)"),
+                });
+
         private static void MapJournalRow(
-            IProviderConfig<JournalTableConfig> config,
+            IProviderConfig<JournalTableConfig<TJournalPayload>> config,
             FluentMappingBuilder fmb,
             string providerName)
         {
             var tableConfig = config.TableConfig;
             var journalConfig = tableConfig.EventJournalTable;
             var columnNames = journalConfig.ColumnNames;
-            var rowBuilder = fmb.Entity<JournalRow>();
+            var rowBuilder = fmb.Entity<JournalRow<TJournalPayload>>();
 
             if (tableConfig.SchemaName is not null)
                 rowBuilder.HasSchemaName(tableConfig.SchemaName);
@@ -117,6 +128,7 @@ namespace Akka.Persistence.Sql.Db
 
                 .Member(r => r.Message)
                 .HasColumnName(columnNames.Message)
+                .HasDataType(MessageType.Value)
                 .IsNullable(false)
 
                 .Member(r => r.Identifier)
@@ -204,7 +216,7 @@ namespace Akka.Persistence.Sql.Db
         }
 
         private static void MapMetadataRow(
-            IProviderConfig<JournalTableConfig> config,
+            IProviderConfig<JournalTableConfig<TJournalPayload>> config,
             FluentMappingBuilder fmb)
         {
             if (!config.IDaoConfig.SqlCommonCompatibilityMode)
@@ -232,7 +244,7 @@ namespace Akka.Persistence.Sql.Db
         }
 
         private static void MapTagRow(
-            IProviderConfig<JournalTableConfig> config,
+            IProviderConfig<JournalTableConfig<TJournalPayload>> config,
             FluentMappingBuilder fmb,
             string providerName)
         {
@@ -282,13 +294,13 @@ namespace Akka.Persistence.Sql.Db
         }
 
         private static void MapDateTimeSnapshotRow(
-            IProviderConfig<SnapshotTableConfiguration> config,
+            IProviderConfig<SnapshotTableConfiguration<TJournalPayload>> config,
             FluentMappingBuilder fmb,
             string providerName)
         {
             var tableConfig = config.TableConfig;
             var snapshotConfig = tableConfig.SnapshotTable;
-            var rowBuilder = fmb.Entity<DateTimeSnapshotRow>();
+            var rowBuilder = fmb.Entity<DateTimeSnapshotRow<TJournalPayload>>();
 
             if (tableConfig.SchemaName is not null)
                 rowBuilder.HasSchemaName(tableConfig.SchemaName);
@@ -334,13 +346,13 @@ namespace Akka.Persistence.Sql.Db
         }
 
         private static void MapLongSnapshotRow(
-            IProviderConfig<SnapshotTableConfiguration> config,
+            IProviderConfig<SnapshotTableConfiguration<TJournalPayload>> config,
             FluentMappingBuilder fmb,
             string providerName)
         {
             var tableConfig = config.TableConfig;
             var snapshotConfig = tableConfig.SnapshotTable;
-            var rowBuilder = fmb.Entity<LongSnapshotRow>();
+            var rowBuilder = fmb.Entity<LongSnapshotRow<TJournalPayload>>();
 
             if (tableConfig.SchemaName is not null)
                 rowBuilder.HasSchemaName(tableConfig.SchemaName);
@@ -365,6 +377,7 @@ namespace Akka.Persistence.Sql.Db
                 .HasLength(500)
 
                 .Member(r => r.Payload)
+                .HasDataType(MessageType.Value)
                 .HasColumnName(snapshotConfig.ColumnNames.Snapshot)
 
                 .Member(r => r.SerializerId)
@@ -394,10 +407,10 @@ namespace Akka.Persistence.Sql.Db
             return options.UseMappingSchema(mappingSchema);
         }
 
-        public AkkaDataConnection GetConnection()
+        public AkkaDataConnection<TJournalPayload> GetConnection()
         {
             if (!_useCloneDataConnection)
-                return new AkkaDataConnection(
+                return new AkkaDataConnection<TJournalPayload>(
                     _opts.ConnectionOptions.ProviderName!,
                     new DataConnection(_opts));
 

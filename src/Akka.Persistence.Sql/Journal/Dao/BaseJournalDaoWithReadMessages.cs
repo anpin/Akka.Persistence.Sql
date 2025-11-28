@@ -20,9 +20,9 @@ using Akka.Util;
 
 namespace Akka.Persistence.Sql.Journal.Dao
 {
-    public abstract class BaseJournalDaoWithReadMessages : IJournalDaoWithReadMessages
+    public abstract class BaseJournalDaoWithReadMessages<TJournalPayload> : IJournalDaoWithReadMessages
     {
-        protected readonly AkkaPersistenceDataConnectionFactory ConnectionFactory;
+        protected readonly AkkaPersistenceDataConnectionFactory<TJournalPayload> ConnectionFactory;
 
         protected readonly IMaterializer Materializer;
 
@@ -37,7 +37,7 @@ namespace Akka.Persistence.Sql.Journal.Dao
         protected BaseJournalDaoWithReadMessages(
             IAdvancedScheduler scheduler,
             IMaterializer materializer,
-            AkkaPersistenceDataConnectionFactory connectionFactory,
+            AkkaPersistenceDataConnectionFactory<TJournalPayload> connectionFactory,
             IProviderConfig config,
             CancellationToken shutdownToken)
         {

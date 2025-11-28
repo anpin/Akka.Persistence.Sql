@@ -14,158 +14,166 @@ using Akka.Persistence.Snapshot;
 using Akka.Persistence.Sql.Config;
 using Akka.Persistence.Sql.Db;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 
-namespace Akka.Persistence.Sql.Snapshot
+namespace Akka.Persistence.Sql.Snapshot;
+
+public class SqlSnapshotStore(Configuration.Config snapshotConfig) : SqlSnapshotStore<byte[]>(snapshotConfig
+    , (s) => s.Item1.ToBinary(s.Item2)
+    , (s) => s.Item1.FromBinary(s.Item2, s.Item3));
+
+public class SqlSnapshotStore<TJournalPayload> : SnapshotStore, IWithUnboundedStash
 {
-    public class SqlSnapshotStore : SnapshotStore, IWithUnboundedStash
+    // ReSharper disable once UnusedMember.Global
+    [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
+    public static readonly Configuration.Config DefaultConfiguration =
+        ConfigurationFactory.FromResource<SqlSnapshotStore<TJournalPayload>>("Akka.Persistence.Sql.snapshot.conf");
+
+    private readonly ByteArraySnapshotDao<TJournalPayload> _dao;
+    private readonly ILoggingAdapter _log;
+    private readonly SnapshotConfig<TJournalPayload> _settings;
+
+    public SqlSnapshotStore(Configuration.Config snapshotConfig,
+        Func<(Serializer, object), TJournalPayload> toPayload,
+        Func<(Serializer, TJournalPayload, Type), object> fromPayload)
     {
-        // ReSharper disable once UnusedMember.Global
-        [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
-        public static readonly Configuration.Config DefaultConfiguration =
-            ConfigurationFactory.FromResource<SqlSnapshotStore>("Akka.Persistence.Sql.snapshot.conf");
+        _log = Context.GetLogger();
 
-        private readonly ByteArraySnapshotDao _dao;
-        private readonly ILoggingAdapter _log;
-        private readonly SnapshotConfig _settings;
+        var config = snapshotConfig.WithFallback(SqlPersistence<TJournalPayload>.DefaultSnapshotConfiguration);
+        _settings = new SnapshotConfig<TJournalPayload>(config);
 
-        public SqlSnapshotStore(Configuration.Config snapshotConfig)
+        var setup = Context.System.Settings.Setup;
+        var singleSetup = setup.Get<DataOptionsSetup<TJournalPayload>>();
+        if (singleSetup.HasValue)
+            _settings = singleSetup.Value.Apply(_settings);
+        if (_settings.PluginId is not null)
         {
-            _log = Context.GetLogger();
-
-            var config = snapshotConfig.WithFallback(SqlPersistence.DefaultSnapshotConfiguration);
-            _settings = new SnapshotConfig(config);
-
-            var setup = Context.System.Settings.Setup;
-            var singleSetup = setup.Get<DataOptionsSetup>();
-            if (singleSetup.HasValue)
-                _settings = singleSetup.Value.Apply(_settings);
-
-            if (_settings.PluginId is not null)
-            {
-                var multiSetup = setup.Get<MultiDataOptionsSetup>();
-                if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_settings.PluginId, out var dataOptions))
-                    _settings = _settings.WithDataOptions(dataOptions!);
-            }
-
-            _dao = new ByteArraySnapshotDao(
-                connectionFactory: new AkkaPersistenceDataConnectionFactory(_settings),
-                snapshotConfig: _settings,
-                serialization: Context.System.Serialization,
-                materializer: Materializer.CreateSystemMaterializer((ExtendedActorSystem)Context.System),
-                logger: Context.GetLogger());
+            var multiSetup = setup.Get<MultiDataOptionsSetup>();
+            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_settings.PluginId, out var dataOptions))
+                _settings = _settings.WithDataOptions(dataOptions!);
         }
 
-        public IStash Stash { get; set; } = null!;
+        _dao = new ByteArraySnapshotDao<TJournalPayload>(
+            connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(_settings),
+            snapshotConfig: _settings,
+            serialization: Context.System.Serialization,
+            materializer: Materializer.CreateSystemMaterializer((ExtendedActorSystem)Context.System),
+            logger: Context.GetLogger(),
+            toPayload: toPayload,
+            fromPayload: fromPayload
+        );
+    }
 
-        protected override void PreStart()
+    public IStash Stash { get; set; }
+
+    protected override void PreStart()
+    {
+        base.PreStart();
+        Initialize().PipeTo(Self);
+        BecomeStacked(WaitingForInitialization);
+    }
+
+    protected override void PostStop()
+    {
+        _dao.Dispose();
+        base.PostStop();
+    }
+
+    private bool WaitingForInitialization(object message)
+    {
+        switch (message)
         {
-            base.PreStart();
-            Initialize().PipeTo(Self);
-            BecomeStacked(WaitingForInitialization);
+            case Status.Success:
+                UnbecomeStacked();
+                Stash.UnstashAll();
+                return true;
+
+            case Status.Failure msg:
+                _log.Error(msg.Cause, "Error during {0} initialization", Self);
+                Context.Stop(Self);
+                return true;
+
+            default:
+                Stash.Stash();
+                return true;
+        }
+    }
+
+    private async Task<Status> Initialize()
+    {
+        if (!_settings.AutoInitialize)
+            return new Status.Success(NotUsed.Instance);
+
+        try
+        {
+            await _dao.InitializeTables();
+        }
+        catch (Exception e)
+        {
+            return new Status.Failure(e);
         }
 
-        protected override void PostStop()
+        return Status.Success.Instance;
+    }
+
+    protected override async Task<SelectedSnapshot?> LoadAsync(
+        string persistenceId,
+        SnapshotSelectionCriteria criteria,
+        CancellationToken cancellationToken)
+        => criteria.MaxSequenceNr switch
         {
-            _dao.Dispose();
-            base.PostStop();
-        }
+            long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue
+                => (await _dao.LatestSnapshotAsync(persistenceId, cancellationToken)).GetOrNull(),
 
-        private bool WaitingForInitialization(object message)
+            long.MaxValue
+                => (await _dao.SnapshotForMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken)).GetOrNull(),
+
+            _ => criteria.MaxTimeStamp == DateTime.MaxValue
+                ? (await _dao.SnapshotForMaxSequenceNrAsync(
+                    persistenceId: persistenceId,
+                    sequenceNr: criteria.MaxSequenceNr,
+                    cancellationToken)).GetOrNull()
+                : (await _dao.SnapshotForMaxSequenceNrAndMaxTimestampAsync(
+                    persistenceId: persistenceId,
+                    sequenceNr: criteria.MaxSequenceNr,
+                    timestamp: criteria.MaxTimeStamp,
+                    cancellationToken)).GetOrNull(),
+        };
+
+    protected override async Task SaveAsync(SnapshotMetadata metadata, object snapshot, CancellationToken cancellationToken)
+        => await _dao.SaveAsync(metadata, snapshot, cancellationToken);
+
+    protected override async Task DeleteAsync(SnapshotMetadata metadata, CancellationToken cancellationToken)
+        => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr, metadata.Timestamp, cancellationToken);
+
+    protected override async Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria, CancellationToken cancellationToken)
+    {
+        switch (criteria.MaxSequenceNr)
         {
-            switch (message)
+            case long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue:
+                await _dao.DeleteAllSnapshotsAsync(persistenceId, cancellationToken);
+                break;
+
+            case long.MaxValue:
+                await _dao.DeleteUpToMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken);
+                break;
+
+            default:
             {
-                case Status.Success:
-                    UnbecomeStacked();
-                    Stash.UnstashAll();
-                    return true;
-
-                case Status.Failure msg:
-                    _log.Error(msg.Cause, "Error during {0} initialization", Self);
-                    // trigger a restart so we have some hope of succeeding in the future even if initialization failed
-                    throw new ApplicationException("Failed to initialize SQL SnapshotStore.", msg.Cause);
-
-                default:
-                    Stash.Stash();
-                    return true;
-            }
-        }
-
-        private async Task<Status> Initialize()
-        {
-            if (!_settings.AutoInitialize)
-                return new Status.Success(NotUsed.Instance);
-
-            try
-            {
-                await _dao.InitializeTables();
-            }
-            catch (Exception e)
-            {
-                return new Status.Failure(e);
-            }
-
-            return Status.Success.Instance;
-        }
-
-        protected override async Task<SelectedSnapshot?> LoadAsync(
-            string persistenceId,
-            SnapshotSelectionCriteria criteria, 
-            CancellationToken cancellationToken)
-            => criteria.MaxSequenceNr switch
-            {
-                long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue
-                    => (await _dao.LatestSnapshotAsync(persistenceId, cancellationToken)).GetOrNull(),
-
-                long.MaxValue
-                    => (await _dao.SnapshotForMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken)).GetOrNull(),
-
-                _ => criteria.MaxTimeStamp == DateTime.MaxValue
-                    ? (await _dao.SnapshotForMaxSequenceNrAsync(
-                        persistenceId: persistenceId,
-                        sequenceNr: criteria.MaxSequenceNr, 
-                        cancellationToken: cancellationToken)).GetOrNull()
-                    : (await _dao.SnapshotForMaxSequenceNrAndMaxTimestampAsync(
-                        persistenceId: persistenceId,
-                        sequenceNr: criteria.MaxSequenceNr,
-                        timestamp: criteria.MaxTimeStamp, 
-                        cancellationToken: cancellationToken)).GetOrNull(),
-            };
-
-        protected override async Task SaveAsync(SnapshotMetadata metadata, object snapshot, CancellationToken cancellationToken)
-            => await _dao.SaveAsync(metadata, snapshot, cancellationToken);
-
-        protected override async Task DeleteAsync(SnapshotMetadata metadata, CancellationToken cancellationToken)
-            => await _dao.DeleteAsync(metadata.PersistenceId, metadata.SequenceNr, metadata.Timestamp, cancellationToken);
-
-        protected override async Task DeleteAsync(string persistenceId, SnapshotSelectionCriteria criteria, CancellationToken cancellationToken)
-        {
-            switch (criteria.MaxSequenceNr)
-            {
-                case long.MaxValue when criteria.MaxTimeStamp == DateTime.MaxValue:
-                    await _dao.DeleteAllSnapshotsAsync(persistenceId, cancellationToken);
-                    break;
-
-                case long.MaxValue:
-                    await _dao.DeleteUpToMaxTimestampAsync(persistenceId, criteria.MaxTimeStamp, cancellationToken);
-                    break;
-
-                default:
+                if (criteria.MaxTimeStamp == DateTime.MaxValue)
                 {
-                    if (criteria.MaxTimeStamp == DateTime.MaxValue)
-                    {
-                        await _dao.DeleteUpToMaxSequenceNrAsync(persistenceId, criteria.MaxSequenceNr, cancellationToken);
-                    }
-                    else
-                    {
-                        await _dao.DeleteUpToMaxSequenceNrAndMaxTimestampAsync(
-                            persistenceId: persistenceId,
-                            maxSequenceNr: criteria.MaxSequenceNr,
-                            maxTimestamp: criteria.MaxTimeStamp, 
-                            cancellationToken: cancellationToken);
-                    }
-
-                    break;
+                    await _dao.DeleteUpToMaxSequenceNrAsync(persistenceId, criteria.MaxSequenceNr, cancellationToken);
                 }
+                else
+                {
+                    await _dao.DeleteUpToMaxSequenceNrAndMaxTimestampAsync(
+                        persistenceId: persistenceId,
+                        maxSequenceNr: criteria.MaxSequenceNr,
+                        maxTimestamp: criteria.MaxTimeStamp,
+                        cancellationToken);
+                }
+
+                break;
             }
         }
     }

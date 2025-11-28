@@ -18,11 +18,11 @@ namespace Akka.Persistence.Sql.Extensions
 {
     public static class ConnectionFactoryExtensions
     {
-        public static async Task ExecuteWithTransactionAsync(
-            this AkkaPersistenceDataConnectionFactory factory,
+        public static async Task ExecuteWithTransactionAsync<TJournalPayload>(
+            this AkkaPersistenceDataConnectionFactory<TJournalPayload> factory,
             IsolationLevel level,
             CancellationToken token,
-            Func<AkkaDataConnection, CancellationToken, Task> handler)
+            Func<AkkaDataConnection<TJournalPayload>, CancellationToken, Task> handler)
         {
             await using var connection = factory.GetConnection();
             await using var tx = await connection.BeginTransactionAsync(level, token);
@@ -47,10 +47,10 @@ namespace Akka.Persistence.Sql.Extensions
             }
         }
 
-        internal static async Task<T> ExecuteQueryWithTransactionAsync<T>(
-            this AkkaPersistenceDataConnectionFactory factory,
-            DbStateHolder state,
-            Func<AkkaDataConnection, CancellationToken, Task<T>> handler)
+        internal static async Task<T> ExecuteQueryWithTransactionAsync<TJournalPayload, T>(
+            this AkkaPersistenceDataConnectionFactory<TJournalPayload> factory,
+            DbStateHolder<TJournalPayload> state,
+            Func<AkkaDataConnection<TJournalPayload>, CancellationToken, Task<T>> handler)
         {
             try
             {
@@ -62,12 +62,11 @@ namespace Akka.Persistence.Sql.Extensions
                 state.QueryPermitter.Tell(ReturnQueryStart.Instance);
             }
         }
-
-        public static async Task<T> ExecuteWithTransactionAsync<T>(
-            this AkkaPersistenceDataConnectionFactory factory,
+        public static async Task<T> ExecuteWithTransactionAsync<TJournalPayload,T>(
+            this AkkaPersistenceDataConnectionFactory<TJournalPayload> factory,
             IsolationLevel level,
             CancellationToken token,
-            Func<AkkaDataConnection, CancellationToken, Task<T>> handler)
+            Func<AkkaDataConnection<TJournalPayload>, CancellationToken, Task<T>> handler)
         {
             await using var connection = factory.GetConnection();
             await using var tx = await connection.BeginTransactionAsync(level, token);
@@ -92,11 +91,11 @@ namespace Akka.Persistence.Sql.Extensions
                 throw;
             }
         }
-        
-        internal static async Task<T> ExecuteQueryWithTransactionAsync<TState,T>(
-            this DbStateHolder factory,
+
+        internal static async Task<T> ExecuteQueryWithTransactionAsync<TJournalPayload, TState,T>(
+            this DbStateHolder<TJournalPayload> factory,
             TState state,
-            Func<AkkaDataConnection, CancellationToken, TState, Task<T>> handler)
+            Func<AkkaDataConnection<TJournalPayload>, CancellationToken, TState, Task<T>> handler)
         {
             try
             {
@@ -108,13 +107,13 @@ namespace Akka.Persistence.Sql.Extensions
                 factory.QueryPermitter.Tell(ReturnQueryStart.Instance);
             }
         }
-        
-        public static async Task<T> ExecuteWithTransactionAsync<TState,T>(
-            this AkkaPersistenceDataConnectionFactory factory,
+
+        public static async Task<T> ExecuteWithTransactionAsync<TJournalPayload, TState,T>(
+            this AkkaPersistenceDataConnectionFactory<TJournalPayload> factory,
             TState state,
             IsolationLevel level,
             CancellationToken token,
-            Func<AkkaDataConnection, CancellationToken, TState, Task<T>> handler)
+            Func<AkkaDataConnection<TJournalPayload>, CancellationToken, TState, Task<T>> handler)
         {
             await using var connection = factory.GetConnection();
             await using var tx = await connection.BeginTransactionAsync(level, token);

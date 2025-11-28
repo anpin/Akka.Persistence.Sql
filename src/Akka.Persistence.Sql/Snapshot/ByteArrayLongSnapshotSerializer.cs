@@ -11,26 +11,32 @@ using Akka.Util;
 
 namespace Akka.Persistence.Sql.Snapshot
 {
-    public class ByteArrayLongSnapshotSerializer : ISnapshotSerializer<LongSnapshotRow>
+    public class ByteArrayLongSnapshotSerializer<TJournalPayload> : ISnapshotSerializer<LongSnapshotRow<TJournalPayload>>
     {
-        private readonly SnapshotConfig _config;
+        private readonly SnapshotConfig<TJournalPayload> _config;
         private readonly Akka.Serialization.Serialization _serialization;
 
+        private readonly Func<(Serializer, object), TJournalPayload> _toPayload;
+        private readonly Func<(Serializer, TJournalPayload, Type), object> _fromPayload;
         public ByteArrayLongSnapshotSerializer(
             Akka.Serialization.Serialization serialization,
-            SnapshotConfig config)
+            SnapshotConfig<TJournalPayload> config,
+            Func<(Serializer, object), TJournalPayload> toPayload,
+            Func<(Serializer, TJournalPayload, Type), object> fromPayload)
         {
             _serialization = serialization;
             _config = config;
+            _toPayload = toPayload;
+            _fromPayload = fromPayload;
         }
 
-        public Try<LongSnapshotRow> Serialize(SnapshotMetadata metadata, object snapshot)
-            => Try<LongSnapshotRow>.From(() => ToSnapshotEntry(metadata, snapshot));
+        public Try<LongSnapshotRow<TJournalPayload>> Serialize(SnapshotMetadata metadata, object snapshot)
+            => Try<LongSnapshotRow<TJournalPayload>>.From(() => ToSnapshotEntry(metadata, snapshot));
 
-        public Try<SelectedSnapshot> Deserialize(LongSnapshotRow t)
+        public Try<SelectedSnapshot> Deserialize(LongSnapshotRow<TJournalPayload> t)
             => Try<SelectedSnapshot>.From(() => ReadSnapshot(t));
 
-        protected SelectedSnapshot ReadSnapshot(LongSnapshotRow reader)
+        protected SelectedSnapshot ReadSnapshot(LongSnapshotRow<TJournalPayload> reader)
         {
             var metadata = new SnapshotMetadata(
                 reader.PersistenceId,
@@ -42,12 +48,12 @@ namespace Akka.Persistence.Sql.Snapshot
             return new SelectedSnapshot(metadata, snapshot);
         }
 
-        protected object GetSnapshot(LongSnapshotRow reader)
+        protected object GetSnapshot(LongSnapshotRow<TJournalPayload> reader)
         {
             var manifest = reader.Manifest;
-            var binary = reader.Payload;
+            var payload = reader.Payload;
 
-            if (reader.SerializerId is null)
+            if (reader.SerializerId is not null)
             {
                 var type = Type.GetType(manifest, true);
 
@@ -56,23 +62,26 @@ namespace Akka.Persistence.Sql.Snapshot
                     system: _serialization.System,
                     state: (
                         serializer: _serialization.FindSerializerForType(type, _config.DefaultSerializer),
-                        binary,
+                        binary: payload,
                         type),
-                    action: state => state.serializer.FromBinary(state.binary, state.type));
+                    action: _fromPayload);
             }
-
-            var serializerId = reader.SerializerId.Value;
-            return _serialization.Deserialize(binary, serializerId, manifest);
+            if (payload is byte[] binary)
+            {
+                var serializerId = reader.SerializerId.Value;
+                return  _serialization.Deserialize(binary, serializerId, manifest);
+            }
+            throw new ArgumentOutOfRangeException(nameof(reader), reader, "failed to deserialize snapshot");
         }
 
-        private LongSnapshotRow ToSnapshotEntry(SnapshotMetadata metadata, object snapshot)
+        private LongSnapshotRow<TJournalPayload> ToSnapshotEntry(SnapshotMetadata metadata, object snapshot)
         {
             var snapshotType = snapshot.GetType();
             var serializer = _serialization.FindSerializerForType(snapshotType, _config.DefaultSerializer);
             var binary = Akka.Serialization.Serialization.WithTransport(
                 system: _serialization.System,
                 state: (serializer, snapshot),
-                action: state => state.serializer.ToBinary(state.snapshot));
+                action: _toPayload); //state => state.serializer.ToBinary(state.snapshot));
 
             var manifest = serializer switch
             {
@@ -81,7 +90,7 @@ namespace Akka.Persistence.Sql.Snapshot
                 _ => string.Empty,
             };
 
-            return new LongSnapshotRow
+            return new LongSnapshotRow<TJournalPayload>
             {
                 PersistenceId = metadata.PersistenceId,
                 SequenceNumber = metadata.SequenceNr,

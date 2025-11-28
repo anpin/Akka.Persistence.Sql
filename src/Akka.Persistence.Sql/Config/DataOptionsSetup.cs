@@ -9,7 +9,7 @@ using LinqToDB;
 
 namespace Akka.Persistence.Sql.Config
 {
-    public sealed class DataOptionsSetup: Setup
+    public sealed class DataOptionsSetup<TJournalPayload>: Setup
     {
         private DataOptions? DataOptions { get; }
 
@@ -18,7 +18,7 @@ namespace Akka.Persistence.Sql.Config
             DataOptions = dataOptions;
         }
 
-        internal ReadJournalConfig Apply(ReadJournalConfig config)
+        internal ReadJournalConfig<TJournalPayload> Apply(ReadJournalConfig<TJournalPayload> config)
         {
             if (DataOptions != null)
                 config = config.WithDataOptions(DataOptions);
@@ -26,7 +26,7 @@ namespace Akka.Persistence.Sql.Config
             return config;
         }
 
-        internal JournalConfig Apply(JournalConfig config)
+        internal JournalConfig<TJournalPayload> Apply(JournalConfig<TJournalPayload> config)
         {
             if (DataOptions != null)
                 config = config.WithDataOptions(DataOptions);
@@ -34,7 +34,7 @@ namespace Akka.Persistence.Sql.Config
             return config;
         }
 
-        internal SnapshotConfig Apply(SnapshotConfig config)
+        internal SnapshotConfig<TJournalPayload> Apply(SnapshotConfig<TJournalPayload> config)
         {
             if (DataOptions != null)
                 config = config.WithDataOptions(DataOptions);

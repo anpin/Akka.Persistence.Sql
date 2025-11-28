@@ -17,7 +17,7 @@ using LinqToDB.SchemaProvider;
 
 namespace Akka.Persistence.Sql.Db
 {
-    public class AkkaDataConnection : IDisposable, IAsyncDisposable
+    public class AkkaDataConnection<TJournalPayload> : IDisposable, IAsyncDisposable
     {
         private readonly DataConnection _connection;
         private readonly string _providerName;
@@ -28,7 +28,6 @@ namespace Akka.Persistence.Sql.Db
         {
             _providerName = providerName.ToLower();
             _connection = connection;
-
             UseDateTime = _providerName.ToLowerInvariant().Contains("sqlserver");
         }
 
@@ -42,12 +41,14 @@ namespace Akka.Persistence.Sql.Db
         public void Dispose()
             => _connection.Dispose();
 
-        public AkkaDataConnection Clone()
+        public AkkaDataConnection<TJournalPayload> Clone()
             => new(_providerName, (DataConnection)_connection.Clone());
 
         public DatabaseSchema GetSchema()
             => _connection.DataProvider.GetSchemaProvider().GetSchema(_connection);
 
+        public DataConnection Connection => _connection;
+        
         public ITable<T> CreateTable<T>() where T : notnull
             => _connection.CreateTable<T>();
 
@@ -69,22 +70,22 @@ namespace Akka.Persistence.Sql.Db
             => await _connection.BeginTransactionAsync(isolationLevel, cancellationToken);
 
         public async Task<int> InsertAsync(
-            JournalRow journalRow,
+            JournalRow<TJournalPayload> journalRow,
             CancellationToken cancellationToken = default)
             => await _connection.InsertAsync(journalRow, token: cancellationToken);
 
         public async Task<long> InsertWithInt64IdentityAsync(
-            JournalRow journalRow,
+            JournalRow<TJournalPayload> journalRow,
             CancellationToken cancellationToken = default)
             => await _connection.InsertWithInt64IdentityAsync(journalRow, token: cancellationToken);
 
         public async Task<int> InsertOrReplaceAsync(
-            DateTimeSnapshotRow dateTimeSnapshotRow,
+            DateTimeSnapshotRow<TJournalPayload> dateTimeSnapshotRow,
             CancellationToken cancellationToken = default)
             => await _connection.InsertOrReplaceAsync(dateTimeSnapshotRow, token: cancellationToken);
 
         public async Task<int> InsertOrReplaceAsync(
-            LongSnapshotRow longSnapshotRow,
+            LongSnapshotRow<TJournalPayload> longSnapshotRow,
             CancellationToken cancellationToken = default)
             => await _connection.InsertOrReplaceAsync(longSnapshotRow, token: cancellationToken);
 

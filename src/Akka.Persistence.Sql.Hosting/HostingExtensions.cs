@@ -132,7 +132,7 @@ namespace Akka.Persistence.Sql.Hosting
         ///     Thrown when <paramref name="connectionString"/> or <paramref name="providerName"/> is null
         ///     or whitespace
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
             string connectionString,
             string providerName,
@@ -157,7 +157,7 @@ namespace Akka.Persistence.Sql.Hosting
             if (string.IsNullOrWhiteSpace(providerName))
                 throw new ArgumentNullException(nameof(providerName), $"{nameof(providerName)} can not be null");
 
-            var journalOpt = new SqlJournalOptions(isDefaultPlugin, pluginIdentifier)
+            var journalOpt = new SqlJournalOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 ConnectionString = connectionString,
                 ProviderName = providerName,
@@ -187,7 +187,7 @@ namespace Akka.Persistence.Sql.Hosting
             journalBuilder?.Invoke(adapters);
             journalOpt.Adapters = adapters;
 
-            var snapshotOpt = new SqlSnapshotOptions(isDefaultPlugin, pluginIdentifier)
+            var snapshotOpt = new SqlSnapshotOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 ConnectionString = connectionString,
                 ProviderName = providerName,
@@ -339,9 +339,9 @@ namespace Akka.Persistence.Sql.Hosting
         ///     <see cref="PersistenceMode.SnapshotStore" />
         /// </exception>
         /// <exception cref="ArgumentNullException">
-        ///     Thrown when <paramref name="dataOptions"/> is null 
+        ///     Thrown when <paramref name="dataOptions"/> is null
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
             DataOptions dataOptions,
             PersistenceMode mode = PersistenceMode.Both,
@@ -361,8 +361,8 @@ namespace Akka.Persistence.Sql.Hosting
 
             if (dataOptions is null)
                 throw new ArgumentNullException(nameof(dataOptions), $"{nameof(dataOptions)} can not be null");
-            
-            var journalOpt = new SqlJournalOptions(isDefaultPlugin, pluginIdentifier)
+
+            var journalOpt = new SqlJournalOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 AutoInitialize = autoInitialize,
                 TagStorageMode = tagStorageMode,
@@ -391,7 +391,7 @@ namespace Akka.Persistence.Sql.Hosting
             journalBuilder?.Invoke(adapters);
             journalOpt.Adapters = adapters;
 
-            var snapshotOpt = new SqlSnapshotOptions(isDefaultPlugin, pluginIdentifier)
+            var snapshotOpt = new SqlSnapshotOptions<TJournalPayload>(isDefaultPlugin, pluginIdentifier)
             {
                 DataOptions = dataOptions,
                 AutoInitialize = autoInitialize,
@@ -414,7 +414,7 @@ namespace Akka.Persistence.Sql.Hosting
                 _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Invalid PersistenceMode defined."),
             };
         }
-        
+
         /// <summary>
         ///     Adds Akka.Persistence.Sql support to this <see cref="ActorSystem" />. At least one of the
         ///     configurator delegate needs to be populated else this method will throw an exception.
@@ -449,26 +449,26 @@ namespace Akka.Persistence.Sql.Hosting
         ///     Thrown when both <paramref name="journalOptionConfigurator" /> and <paramref name="snapshotOptionConfigurator" />
         ///     are null.
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
-            Action<SqlJournalOptions>? journalOptionConfigurator = null,
-            Action<SqlSnapshotOptions>? snapshotOptionConfigurator = null,
+            Action<SqlJournalOptions<TJournalPayload>>? journalOptionConfigurator = null,
+            Action<SqlSnapshotOptions<TJournalPayload>>? snapshotOptionConfigurator = null,
             bool isDefaultPlugin = true)
         {
             if (journalOptionConfigurator is null && snapshotOptionConfigurator is null)
                 throw new ArgumentException($"{nameof(journalOptionConfigurator)} and {nameof(snapshotOptionConfigurator)} could not both be null");
 
-            SqlJournalOptions? journalOptions = null;
+            SqlJournalOptions<TJournalPayload>? journalOptions = null;
             if (journalOptionConfigurator is not null)
             {
-                journalOptions = new SqlJournalOptions(isDefaultPlugin);
+                journalOptions = new SqlJournalOptions<TJournalPayload>(isDefaultPlugin);
                 journalOptionConfigurator(journalOptions);
             }
 
-            SqlSnapshotOptions? snapshotOptions = null;
+            SqlSnapshotOptions<TJournalPayload>? snapshotOptions = null;
             if (snapshotOptionConfigurator is not null)
             {
-                snapshotOptions = new SqlSnapshotOptions(isDefaultPlugin);
+                snapshotOptions = new SqlSnapshotOptions<TJournalPayload>(isDefaultPlugin);
                 snapshotOptionConfigurator(snapshotOptions);
             }
 
@@ -500,10 +500,10 @@ namespace Akka.Persistence.Sql.Hosting
         /// <exception cref="ArgumentException">
         ///     Thrown when both <paramref name="journalOptions" /> and <paramref name="snapshotOptions" /> are null.
         /// </exception>
-        public static AkkaConfigurationBuilder WithSqlPersistence(
+        public static AkkaConfigurationBuilder WithSqlPersistence<TJournalPayload>(
             this AkkaConfigurationBuilder builder,
-            SqlJournalOptions? journalOptions = null,
-            SqlSnapshotOptions? snapshotOptions = null)
+            SqlJournalOptions<TJournalPayload>? journalOptions = null,
+            SqlSnapshotOptions<TJournalPayload>? snapshotOptions = null)
         {
             if (journalOptions?.DataOptions is not null)
             {
@@ -525,7 +525,7 @@ namespace Akka.Persistence.Sql.Hosting
                 }
                 setup.AddDataOptions(snapshotOptions.PluginId, snapshotOptions.DataOptions);
             }
-            
+
             return (journalOptions, snapshotOptions) switch
             {
                 (null, null) =>

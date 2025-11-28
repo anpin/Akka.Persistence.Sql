@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
@@ -21,13 +22,44 @@ using Akka.Persistence.Sql.Journal.Dao;
 using Akka.Persistence.Sql.Query.Dao;
 using Akka.Persistence.Sql.Query.InternalProtocol;
 using Akka.Persistence.Sql.Utility;
+using Akka.Serialization;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Akka.Util;
 
 namespace Akka.Persistence.Sql.Query
 {
-    public class SqlReadJournal :
+    public sealed class SqlReadJournal<TJournalPayload>
+        : SqlReadJournal<TJournalPayload, ByteArrayReadJournalDao<TJournalPayload>>
+    {
+        public SqlReadJournal(
+            ExtendedActorSystem system
+            , Configuration.Config config
+            , Func<(Serializer, object), TJournalPayload> toPayload
+            , Func<(Serializer, TJournalPayload, Type), object> fromPayload)
+            : base(system, config
+                , (mat, readJournalConfig, queryPermitter) =>
+                    new ByteArrayReadJournalDao<TJournalPayload>(
+                        scheduler: system.Scheduler.Advanced,
+                        materializer: mat,
+                        connectionFactory: new AkkaPersistenceDataConnectionFactory<TJournalPayload>(readJournalConfig),
+                        readJournalConfig: readJournalConfig,
+                        serializer: new ByteArrayJournalSerializer<TJournalPayload>(
+                            journalConfig: readJournalConfig,
+                            serializer: system.Serialization,
+                            separator: readJournalConfig.PluginConfig.TagSeparator,
+                            writerUuid: null,
+                            toPayload: toPayload,
+                            fromPayload: fromPayload
+                            ),
+                        queryPermitter: queryPermitter,
+                        // TODO: figure out a way to signal shutdown to the query executor here
+                        CancellationToken.None))
+        {
+        }
+    }
+
+    public class SqlReadJournal<TJournalPayload, TReaderDao> :
         IPersistenceIdsQuery,
         ICurrentPersistenceIdsQuery,
         IEventsByPersistenceIdQuery,
@@ -36,82 +68,78 @@ namespace Akka.Persistence.Sql.Query
         ICurrentEventsByTagQuery,
         IAllEventsQuery,
         ICurrentAllEventsQuery
+        where TReaderDao : BaseByteReadArrayJournalDao<TJournalPayload>
     {
         // ReSharper disable once UnusedMember.Global
         [Obsolete(message: "Use SqlPersistence.Get(ActorSystem).DefaultConfig instead")]
-        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal.DefaultConfiguration;
+        public static readonly Configuration.Config DefaultConfiguration = SqlWriteJournal<TJournalPayload>.DefaultConfiguration;
 
         private readonly Source<long, ICancelable> _delaySource;
         private readonly EventAdapters _eventAdapters;
         private readonly IActorRef _journalSequenceActor;
         private readonly ActorMaterializer _mat;
-        private readonly ReadJournalConfig _readJournalConfig;
-        private readonly ByteArrayReadJournalDao _readJournalDao;
         private readonly ExtendedActorSystem _system;
+        protected readonly ReadJournalConfig<TJournalPayload> ReadJournalConfig;
+        protected readonly TReaderDao ReadJournalDao;
+
+
         private readonly IActorRef _queryPermitter;
         private readonly ILoggingAdapter _log;
 
         public SqlReadJournal(
             ExtendedActorSystem system,
-            Configuration.Config config)
+            Configuration.Config config,
+            Func<IMaterializer, ReadJournalConfig<TJournalPayload>, IActorRef, TReaderDao> readerFactory
+        )
         {
-            _readJournalConfig = new ReadJournalConfig(config);
+            ReadJournalConfig = new ReadJournalConfig<TJournalPayload>(config);
 
             var setup = system.Settings.Setup;
-            var singleSetup = setup.Get<DataOptionsSetup>();
+            var singleSetup = setup.Get<DataOptionsSetup<TJournalPayload>>();
             if (singleSetup.HasValue)
-                _readJournalConfig = singleSetup.Value.Apply(_readJournalConfig);
-            
-            var multiSetup = setup.Get<MultiDataOptionsSetup>();
-            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(_readJournalConfig.PluginId, out var dataOptions))
-                _readJournalConfig = _readJournalConfig.WithDataOptions(dataOptions!);
+                ReadJournalConfig = singleSetup.Value.Apply(ReadJournalConfig);
 
-            _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(_readJournalConfig.WritePluginId);
-            
+            var multiSetup = setup.Get<MultiDataOptionsSetup>();
+            if (multiSetup.HasValue && multiSetup.Value.TryGetDataOptionsFor(ReadJournalConfig.PluginId, out var dataOptions))
+                ReadJournalConfig = ReadJournalConfig.WithDataOptions(dataOptions!);
+
+            _eventAdapters = Persistence.Instance.Apply(system).AdaptersFor(ReadJournalConfig.WritePluginId);
             // Fix for https://github.com/akkadotnet/Akka.Persistence.Sql/issues/344
-            var writeJournal = Persistence.Instance.Apply(system).JournalFor(_readJournalConfig.WritePluginId);
+            var writeJournal = Persistence.Instance.Apply(system).JournalFor(ReadJournalConfig.WritePluginId);
             // we want to block, we want to crash if the journal is not available
             var started = writeJournal.Ask<Initialized>(IsInitialized.Instance, TimeSpan.FromSeconds(5)).Result;
-            
-            _system = system;
 
-            var connFact = new AkkaPersistenceDataConnectionFactory(_readJournalConfig);
+            _system = system;
 
             _mat = Materializer.CreateSystemMaterializer(
                 context: system,
                 settings: ActorMaterializerSettings.Create(system),
                 namePrefix: $"l2db-query-mat-{Guid.NewGuid():N}");
 
-            _log = Logging.GetLogger(system, $"{_readJournalConfig.PluginId}-{nameof(SqlReadJournal)}");
-            _queryPermitter = system.SystemActorOf(
-                Props.Create(() => new QueryThrottler(_readJournalConfig.MaxConcurrentQueries)), 
-                $"{_readJournalConfig.PluginId}-query-permitter");
+            _log = Logging.GetLogger(system, $"{ReadJournalConfig.PluginId}-{nameof(SqlReadJournal<TJournalPayload>)}");
+            _queryPermitter = system.ActorOf(
+                Props.Create(() => new QueryThrottler(ReadJournalConfig.MaxConcurrentQueries)),
+                $"{ReadJournalConfig.PluginId}-query-permitter");
 
-            _readJournalDao = new ByteArrayReadJournalDao(
-                scheduler: system.Scheduler.Advanced,
-                materializer: _mat,
-                connectionFactory: connFact,
-                readJournalConfig: _readJournalConfig,
-                serializer: new ByteArrayJournalSerializer(
-                    journalConfig: _readJournalConfig,
-                    serializer: system.Serialization,
-                    separator: _readJournalConfig.PluginConfig.TagSeparator,
-                    writerUuid: null),
-                _queryPermitter,
-                // TODO: figure out a way to signal shutdown to the query executor here
-                default);
+            ReadJournalDao = readerFactory(_mat, ReadJournalConfig,_queryPermitter);
 
             _journalSequenceActor = system.SystemActorOf(
                 props: Props.Create(
                     () => new JournalSequenceActor(
-                        _readJournalDao,
-                        _readJournalConfig.JournalSequenceRetrievalConfiguration)),
-                name: $"{_readJournalConfig.PluginId}-{_readJournalConfig.TableConfig.EventJournalTable.Name}-akka-persistence-sql-sequence-actor");
+                        ReadJournalDao,
+                        ReadJournalConfig.JournalSequenceRetrievalConfiguration)),
+                name: $"{ReadJournalConfig.TableConfig.EventJournalTable.Name}akka-persistence-sql-sequence-actor");
 
-            _delaySource = Source.Tick(TimeSpan.FromSeconds(0), _readJournalConfig.RefreshInterval, 0L).Take(1);
+            _delaySource = Source.Tick(TimeSpan.FromSeconds(0), ReadJournalConfig.RefreshInterval, 0L).Take(1);
         }
 
         public static string Identifier => "akka.persistence.query.journal.sql";
+
+        protected Task<MaxOrderingId> QueryUntil() =>
+            _journalSequenceActor
+                    .Ask<MaxOrderingId>(
+                        GetMaxOrderingId.Instance,
+                        ReadJournalConfig.JournalSequenceRetrievalConfiguration.AskTimeout);
 
         public Source<EventEnvelope, NotUsed> AllEvents(Offset offset)
             => Events(
@@ -123,8 +151,8 @@ namespace Akka.Persistence.Sql.Query
         public Source<EventEnvelope, NotUsed> CurrentAllEvents(Offset offset)
             => AsyncSource<long>
                 .FromEnumerable(
-                    state: _readJournalDao,
-                    func: async input => new[] { await input.MaxJournalSequenceAsync() })
+                    state: ReadJournalDao,
+                    func: static async input => new[] { await input.MaxJournalSequenceAsync() })
                 .ConcatMany(
                     maxInDb =>
                         Events(
@@ -147,7 +175,7 @@ namespace Akka.Persistence.Sql.Query
             => CurrentEventsByTag(tag, (offset as Sequence)?.Value ?? 0);
 
         public Source<string, NotUsed> CurrentPersistenceIds()
-            => _readJournalDao.AllPersistenceIdsSource(long.MaxValue);
+            => ReadJournalDao.AllPersistenceIdsSource(long.MaxValue);
 
         public Source<EventEnvelope, NotUsed> EventsByPersistenceId(
             string persistenceId,
@@ -158,7 +186,7 @@ namespace Akka.Persistence.Sql.Query
                 fromSequenceNr: fromSequenceNr,
                 toSequenceNr: toSequenceNr,
                 refreshInterval: Option<(TimeSpan, IScheduler)>.Create(
-                    (_readJournalConfig.RefreshInterval, _system.Scheduler)));
+                    (ReadJournalConfig.RefreshInterval, _system.Scheduler)));
 
         public Source<EventEnvelope, NotUsed> EventsByTag(string tag, Offset offset)
             => EventsByTag(
@@ -191,7 +219,7 @@ namespace Akka.Persistence.Sql.Query
                         return Next;
                     });
 
-        private IImmutableList<IPersistentRepresentation> AdaptEvents(
+        protected IImmutableList<IPersistentRepresentation> AdaptEvents(
             IPersistentRepresentation persistentRepresentation)
             => _eventAdapters
                 .Get(persistentRepresentation.Payload.GetType())
@@ -205,8 +233,9 @@ namespace Akka.Persistence.Sql.Query
             long fromSequenceNr,
             long toSequenceNr,
             Option<(TimeSpan, IScheduler)> refreshInterval)
-            => _readJournalDao
-                .MessagesWithBatch(persistenceId, fromSequenceNr, toSequenceNr, _readJournalConfig.MaxBufferSize, refreshInterval)
+            => ReadJournalDao
+                .MessagesWithBatch(persistenceId, fromSequenceNr, toSequenceNr, ReadJournalConfig.MaxBufferSize,
+                    refreshInterval)
                 .SelectAsync(1, representationAndOrdering => Task.FromResult(representationAndOrdering.Get()))
                 .SelectMany(r => AdaptEvents(r.Representation).Select(_ => new { representation = r.Representation, ordering = r.Ordering, tags = r.Tags}))
                 .Select(
@@ -216,7 +245,7 @@ namespace Akka.Persistence.Sql.Query
                             persistenceId: r.representation.PersistenceId,
                             sequenceNr: r.representation.SequenceNr,
                             @event: r.representation.Payload,
-                            timestamp: r.representation.Timestamp, 
+                            timestamp: r.representation.Timestamp,
                             tags: r.tags));
 
         private Source<EventEnvelope[], NotUsed> CurrentJournalEvents(long offset, long max, MaxOrderingId latestOrdering)
@@ -224,7 +253,7 @@ namespace Akka.Persistence.Sql.Query
             if (latestOrdering.Max < offset)
                 return Source.Empty<EventEnvelope[]>();
 
-            return _readJournalDao
+            return ReadJournalDao
                 .Events(offset, latestOrdering.Max, max)
                 .SelectAsync(1, r => Task.FromResult(r.Get()))
                 .Select(
@@ -254,7 +283,7 @@ namespace Akka.Persistence.Sql.Query
             if (latestOrdering.Max < offset)
                 return Source.Empty<EventEnvelope>();
 
-            return _readJournalDao
+            return ReadJournalDao
                 .EventsByTag(tag, offset, latestOrdering.Max, max)
                 .SelectAsync(1, r => Task.FromResult(r.Get()))
                 .SelectMany(
@@ -276,8 +305,7 @@ namespace Akka.Persistence.Sql.Query
 
         private Source<EventEnvelope, NotUsed> EventsByTag(string tag, long offset, long? terminateAfterOffset)
         {
-            var askTimeout = _readJournalConfig.JournalSequenceRetrievalConfiguration.AskTimeout;
-            var batchSize = _readJournalConfig.MaxBufferSize;
+            var batchSize = ReadJournalConfig.MaxBufferSize;
 
             return Source
                 .UnfoldAsync<(long offset, FlowControlEnum flowControl), IImmutableList<EventEnvelope>>(
@@ -286,10 +314,7 @@ namespace Akka.Persistence.Sql.Query
                     {
                         async Task<Option<((long, FlowControlEnum), IImmutableList<EventEnvelope>)>> RetrieveNextBatch()
                         {
-                            var queryUntil = await _journalSequenceActor
-                                .Ask<MaxOrderingId>(
-                                    GetMaxOrderingId.Instance,
-                                    askTimeout);
+                            var queryUntil = await QueryUntil();
 
                             var xs = await CurrentJournalEventsByTag(tag, uf.offset, batchSize, queryUntil)
                                 .RunWith(Sink.Seq<EventEnvelope>(), _mat);
@@ -333,7 +358,7 @@ namespace Akka.Persistence.Sql.Query
 
                             FlowControlEnum.ContinueDelayed =>
                                 FutureTimeoutSupport.After(
-                                    duration: _readJournalConfig.RefreshInterval,
+                                    duration: ReadJournalConfig.RefreshInterval,
                                     scheduler: _system.Scheduler,
                                     value: RetrieveNextBatch),
 
@@ -346,14 +371,13 @@ namespace Akka.Persistence.Sql.Query
         private Source<EventEnvelope, NotUsed> CurrentEventsByTag(string tag, long offset)
             => AsyncSource<long>
                 .FromEnumerable(
-                    state: new { readJournalDao = _readJournalDao },
-                    func: async input => new[] { await input.readJournalDao.MaxJournalSequenceAsync() })
+                    state: new { readJournalDao = ReadJournalDao },
+                    func: static async input => new[] { await input.readJournalDao.MaxJournalSequenceAsync() })
                 .ConcatMany(maxInDb => EventsByTag(tag, offset, maxInDb));
 
         private Source<EventEnvelope, NotUsed> Events(long offset, long? terminateAfterOffset)
         {
-            var askTimeout = _readJournalConfig.JournalSequenceRetrievalConfiguration.AskTimeout;
-            var batchSize = _readJournalConfig.MaxBufferSize;
+            var batchSize = ReadJournalConfig.MaxBufferSize;
 
             return Source
                 .UnfoldAsync<(long offset, FlowControlEnum flowControl), IImmutableList<EventEnvelope>>(
@@ -362,10 +386,7 @@ namespace Akka.Persistence.Sql.Query
                     {
                         async Task<Option<((long, FlowControlEnum), IImmutableList<EventEnvelope>)>> RetrieveNextBatch()
                         {
-                            var queryUntil = await _journalSequenceActor
-                                .Ask<MaxOrderingId>(
-                                    GetMaxOrderingId.Instance,
-                                    askTimeout);
+                            var queryUntil = await QueryUntil();
 
                             var xs = await CurrentJournalEvents(uf.offset, batchSize, queryUntil)
                                 .RunWith(Sink.Seq<EventEnvelope[]>(), _mat);
@@ -409,7 +430,7 @@ namespace Akka.Persistence.Sql.Query
 
                             FlowControlEnum.ContinueDelayed =>
                                 FutureTimeoutSupport.After(
-                                    _readJournalConfig.RefreshInterval,
+                                    ReadJournalConfig.RefreshInterval,
                                     _system.Scheduler,
                                     RetrieveNextBatch),
 

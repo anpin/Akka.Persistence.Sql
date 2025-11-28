@@ -10,7 +10,7 @@ using LinqToDB.Mapping;
 
 namespace Akka.Persistence.Sql.Snapshot
 {
-    public class LongSnapshotRow
+    public class LongSnapshotRow<TPayload>
     {
         [PrimaryKey]
         [NotNull]
@@ -22,7 +22,7 @@ namespace Akka.Persistence.Sql.Snapshot
         [Column(DataType = DataType.Int64)]
         public long Created { get; set; }
 
-        public byte[] Payload { get; set; } = Array.Empty<byte>();
+        public TPayload Payload { get; set; }
 
         public string Manifest { get; set; } = string.Empty;
 
